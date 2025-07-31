@@ -39,6 +39,9 @@ const CONFIG = {
 
 // Fixed field types array for consistent ordering
 const FIELD_TYPES = [
+    // Unique Identifier (1 field) - ALWAYS FIRST
+    'uuid',
+    
     // Personal Information (13 fields)
     'firstName', 'lastName', 'fullName', 'middleName', 'gender', 'birthDate', 'age',
     'bio', 'jobTitle', 'suffix', 'prefix', 'phone', 'phoneNumber',
@@ -72,8 +75,8 @@ const FIELD_TYPES = [
     // Text & Content (6 fields)
     'description', 'sentence', 'paragraph', 'words', 'slug', 'title',
     
-    // Identification & Codes (8 fields)
-    'uuid', 'nanoid', 'color', 'hexColor', 'number', 'boolean',
+    // Identification & Codes (7 fields)
+    'nanoid', 'color', 'hexColor', 'number', 'boolean',
     'imei', 'creditCardCVV', 'licenseNumber'
 ];
 
