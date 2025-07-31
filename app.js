@@ -26,7 +26,7 @@ const CONFIG = {
         },
         numRecords: {
             min: 1,
-            max: 1000,
+            max: 10000,
             default: 10
         },
         nestedFields: {

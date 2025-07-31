@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         numFields: { min: 1, max: 300, default: 5 },
                         numObjects: { min: 0, max: 10, default: 1 },
                         numNesting: { min: 0, max: 5, default: 1 },
-                        numRecords: { min: 1, max: 1000, default: 10 },
+                        numRecords: { min: 1, max: 10000, default: 10 },
                         nestedFields: { min: 0, max: 50, default: 3 }
                     }
                 };
@@ -276,7 +276,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     numFields: { min: 1, max: 300, default: 5 },
                     numObjects: { min: 0, max: 10, default: 1 },
                     numNesting: { min: 0, max: 5, default: 1 },
-                    numRecords: { min: 1, max: 1000, default: 10 },
+                    numRecords: { min: 1, max: 10000, default: 10 },
                     nestedFields: { min: 0, max: 50, default: 3 }
                 }
             };

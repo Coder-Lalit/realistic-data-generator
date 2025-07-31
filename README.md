@@ -51,7 +51,7 @@ npm run dev
    - **Number of Nested Objects** (0-10): Objects nested within each record
    - **Fields per Nested Object** (0-50): Number of fields in each nested object
    - **Nesting Depth** (0-5): How deep the nesting structure goes
-   - **Number of Records** (1-1000): Total number of data records to generate
+   - **Number of Records** (1-10000): Total number of data records to generate
 
 2. **Generate Data**: Click the "Generate Data" button
 
@@ -268,7 +268,7 @@ uuid_80 → nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 
 - Nested Objects: 0-10
 - Fields per Nested Object: 0-50
 - Nesting Depth: 0-5
-- Records: 1-1000
+- Records: 1-10000
 
 ## 🤝 Contributing
 
