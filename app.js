@@ -155,6 +155,61 @@ app.post('/generate-data', (req, res) => {
     }
 });
 
+// Data-only endpoint (returns only data array without success wrapper)
+app.post('/data', (req, res) => {
+    try {
+        const { numFields, numObjects, numNesting, numRecords, nestedFields } = req.body;
+
+        // Set default for nestedFields if not provided
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
+
+        // Validate input
+        if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
+            return res.status(400).json({ 
+                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
+            });
+        }
+
+        // Validate limits using configuration
+        const limits = CONFIG.limits;
+        
+        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+            return res.status(400).json({ 
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
+            });
+        }
+
+        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+            return res.status(400).json({ 
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
+            });
+        }
+
+        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+            return res.status(400).json({ 
+                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
+            });
+        }
+
+        if (numRecords < limits.numRecords.min || numRecords > limits.numRecords.max) {
+            return res.status(400).json({ 
+                error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
+            });
+        }
+
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({ 
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
+            });
+        }
+
+        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields);
+        res.json(data); // Return only the data array
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Function to generate realistic data
 function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields) {
     const records = [];

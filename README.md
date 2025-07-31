@@ -59,10 +59,11 @@ npm run dev
    - **Copy JSON**: Copy the generated data to clipboard
    - **Download JSON**: Download as a `.json` file
 
-### API Endpoint
+### API Endpoints
 
 You can also use the API directly:
 
+#### **Main Endpoint (with success wrapper)**
 ```bash
 POST /generate-data
 Content-Type: application/json
@@ -74,6 +75,33 @@ Content-Type: application/json
   "numRecords": 10,
   "nestedFields": 3
 }
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [...]
+}
+```
+
+#### **Data-Only Endpoint (clean response)**
+```bash
+POST /data
+Content-Type: application/json
+
+{
+  "numFields": 5,
+  "numObjects": 2,
+  "numNesting": 2,
+  "numRecords": 10,
+  "nestedFields": 3
+}
+```
+
+**Response:**
+```json
+[...]
 ```
 
 ## 📊 Example Output
