@@ -30,6 +30,12 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="nestedFields">Fields per Nested Object</label>
+                        <input type="number" id="nestedFields" min="0" max="50" value="3" required>
+                        <small id="nestedFieldsHelp">Loading limits...</small>
+                    </div>
+
+                    <div class="form-group">
                         <label for="numNesting">Nesting Depth</label>
                         <input type="number" id="numNesting" min="0" max="5" value="2" required>
                         <small id="nestingHelp">Loading limits...</small>
@@ -39,12 +45,6 @@
                         <label for="numRecords">Number of Records</label>
                         <input type="number" id="numRecords" min="1" max="1000" value="10" required>
                         <small id="recordsHelp">Loading limits...</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="nestedFields">Fields per Nested Object</label>
-                        <input type="number" id="nestedFields" min="1" max="50" value="3" required>
-                        <small id="nestedFieldsHelp">Loading limits...</small>
                     </div>
                 </div>
 

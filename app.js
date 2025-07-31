@@ -30,16 +30,52 @@ const CONFIG = {
             default: 10
         },
         nestedFields: {
-            min: 1,
+            min: 0,
             max: 50,
             default: 3
         }
-    },
-    performance: {
-        maxTotalFields: 500, // Maximum total fields across all records
-        maxDataSize: 50 * 1024 * 1024 // 50MB max response size
     }
 };
+
+// Fixed field types array for consistent ordering
+const FIELD_TYPES = [
+    // Personal Information (13 fields)
+    'firstName', 'lastName', 'fullName', 'middleName', 'gender', 'birthDate', 'age',
+    'bio', 'jobTitle', 'suffix', 'prefix', 'phone', 'phoneNumber',
+    
+    // Location & Address (10 fields)
+    'address', 'streetName', 'buildingNumber', 'city', 'state', 'country', 
+    'zipCode', 'latitude', 'longitude', 'timezone',
+    
+    // Business & Finance (13 fields)
+    'company', 'department', 'catchPhrase', 'buzzword', 'salary', 'accountNumber',
+    'routingNumber', 'creditCard', 'currency', 'price', 'transactionType',
+    'bitcoinAddress', 'bankName', 'iban',
+    
+    // Internet & Technology (12 fields)
+    'email', 'website', 'username', 'password', 'domainName', 'ip', 'ipv6',
+    'mac', 'userAgent', 'protocol', 'port', 'emoji',
+    
+    // Commerce & Products (8 fields)
+    'productName', 'productDescription', 'productMaterial', 'productAdjective',
+    'rating', 'isbn', 'ean', 'productCategory',
+    
+    // Vehicle & Transportation (6 fields)
+    'vehicle', 'vehicleModel', 'vehicleManufacturer', 'vehicleType', 'vehicleFuel', 'vin',
+    
+    // System & Files (5 fields)
+    'fileName', 'fileExtension', 'mimeType', 'directoryPath', 'semver',
+    
+    // Dates & Time (5 fields)
+    'date', 'recentDate', 'futureDate', 'weekday', 'month',
+    
+    // Text & Content (6 fields)
+    'description', 'sentence', 'paragraph', 'words', 'slug', 'title',
+    
+    // Identification & Codes (8 fields)
+    'uuid', 'nanoid', 'color', 'hexColor', 'number', 'boolean',
+    'imei', 'creditCardCVV', 'licenseNumber'
+];
 
 // Middleware
 app.use(cors());
@@ -107,13 +143,7 @@ app.post('/generate-data', (req, res) => {
             });
         }
 
-        // Performance validation
-        const totalFields = numFields * numRecords;
-        if (totalFields > CONFIG.performance.maxTotalFields) {
-            return res.status(400).json({ 
-                error: `Total fields (${totalFields}) exceeds maximum allowed (${CONFIG.performance.maxTotalFields}). Reduce fields or records.` 
-            });
-        }
+        // Performance validation removed - no limits on total fields
 
         const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields);
         res.json({ success: true, data });
@@ -137,48 +167,10 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
 // Function to generate a single object with specified parameters
 function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
     const obj = {};
-    const fieldTypes = [
-        // Personal Information
-        'firstName', 'lastName', 'fullName', 'middleName', 'gender', 'birthDate', 'age',
-        'email', 'phone', 'bio', 'jobTitle', 'suffix', 'prefix',
-        
-        // Location & Address
-        'address', 'streetName', 'buildingNumber', 'city', 'state', 'country', 
-        'zipCode', 'latitude', 'longitude', 'timezone',
-        
-        // Business & Finance
-        'company', 'department', 'catchPhrase', 'buzzword', 'salary', 'accountNumber',
-        'routingNumber', 'creditCard', 'currency', 'price', 'transactionType',
-        'bitcoinAddress', 'bankName', 'iban',
-        
-        // Internet & Technology
-        'website', 'username', 'password', 'email', 'domainName', 'ip', 'ipv6',
-        'mac', 'userAgent', 'protocol', 'port', 'emoji',
-        
-        // Commerce & Products
-        'productName', 'productDescription', 'productMaterial', 'productAdjective',
-        'rating', 'isbn', 'ean', 'productCategory',
-        
-        // Vehicle & Transportation
-        'vehicle', 'vehicleModel', 'vehicleManufacturer', 'vehicleType', 'vehicleFuel', 'vin',
-        
-        // System & Files
-        'fileName', 'fileExtension', 'mimeType', 'directoryPath', 'semver',
-        
-        // Dates & Time
-        'date', 'recentDate', 'futureDate', 'weekday', 'month', 'timeZone',
-        
-        // Text & Content
-        'description', 'sentence', 'paragraph', 'words', 'slug', 'title',
-        
-        // Identification & Codes
-        'uuid', 'nanoid', 'color', 'hexColor', 'number', 'boolean',
-        'phoneNumber', 'imei', 'creditCardCVV', 'licenseNumber'
-    ];
 
-    // Generate basic fields
+    // Generate basic fields using the global FIELD_TYPES array for consistent ordering
     for (let i = 0; i < numFields; i++) {
-        const fieldType = fieldTypes[i % fieldTypes.length];
+        const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
         obj[fieldName] = generateFieldValue(fieldType);
     }
@@ -202,13 +194,10 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
 // Function to generate a simple object (no nesting)
 function generateSimpleObject(numFields = 4) {
     const obj = {};
-    const fieldTypes = [
-        'uuid', 'firstName', 'lastName', 'email', 'phone', 'company', 
-        'jobTitle', 'number', 'boolean', 'date', 'address', 'color'
-    ];
 
+    // Use the same global FIELD_TYPES array for consistent ordering
     for (let i = 0; i < numFields; i++) {
-        const fieldType = fieldTypes[i % fieldTypes.length];
+        const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
         obj[fieldName] = generateFieldValue(fieldType);
     }
@@ -301,7 +290,7 @@ function generateFieldValue(fieldType) {
         case 'website':
             return faker.internet.url();
         case 'username':
-            return faker.internet.username();
+            return faker.internet.userName();
         case 'password':
             return faker.internet.password({ length: 12 });
         case 'domainName':

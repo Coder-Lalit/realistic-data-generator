@@ -49,6 +49,7 @@ npm run dev
 1. **Set Parameters**:
    - **Number of Fields** (1-300): Basic data fields like names, emails, addresses
    - **Number of Nested Objects** (0-10): Objects nested within each record
+   - **Fields per Nested Object** (0-50): Number of fields in each nested object
    - **Nesting Depth** (0-5): How deep the nesting structure goes
    - **Number of Records** (1-1000): Total number of data records to generate
 
@@ -70,7 +71,8 @@ Content-Type: application/json
   "numFields": 5,
   "numObjects": 2,
   "numNesting": 2,
-  "numRecords": 10
+  "numRecords": 10,
+  "nestedFields": 3
 }
 ```
 
@@ -140,6 +142,121 @@ The application generates various realistic field types:
 - **Technical**: UUID, dates, numbers, booleans
 - **Content**: Lorem ipsum descriptions
 
+## 📋 Predictable Field Order
+
+The data generator uses a **consistent, predictable field ordering system**. Fields are always generated in the same order, making your API responses reliable and data processing easier.
+
+### 🔄 How It Works
+
+- **Consistent Ordering**: Every request with the same number of fields will produce the same field order
+- **Deterministic Cycling**: When requesting more than 88 fields, the system cycles back to the beginning
+- **Cross-Record Consistency**: All records in a dataset have identical field ordering
+
+### 📊 Complete Field Order (88 Total Field Types)
+
+#### **Personal Information (13 fields)**
+```
+firstName_1 → lastName_2 → fullName_3 → middleName_4 → gender_5 → birthDate_6 → age_7 → bio_8 → jobTitle_9 → suffix_10 → prefix_11 → phone_12 → phoneNumber_13
+```
+
+#### **Location & Address (10 fields)**
+```
+address_14 → streetName_15 → buildingNumber_16 → city_17 → state_18 → country_19 → zipCode_20 → latitude_21 → longitude_22 → timezone_23
+```
+
+#### **Business & Finance (13 fields)**
+```
+company_24 → department_25 → catchPhrase_26 → buzzword_27 → salary_28 → accountNumber_29 → routingNumber_30 → creditCard_31 → currency_32 → price_33 → transactionType_34 → bitcoinAddress_35 → bankName_36 → iban_37
+```
+
+#### **Internet & Technology (12 fields)**
+```
+email_38 → website_39 → username_40 → password_41 → domainName_42 → ip_43 → ipv6_44 → mac_45 → userAgent_46 → protocol_47 → port_48 → emoji_49
+```
+
+#### **Commerce & Products (8 fields)**
+```
+productName_50 → productDescription_51 → productMaterial_52 → productAdjective_53 → rating_54 → isbn_55 → ean_56 → productCategory_57
+```
+
+#### **Vehicle & Transportation (6 fields)**
+```
+vehicle_58 → vehicleModel_59 → vehicleManufacturer_60 → vehicleType_61 → vehicleFuel_62 → vin_63
+```
+
+#### **System & Files (5 fields)**
+```
+fileName_64 → fileExtension_65 → mimeType_66 → directoryPath_67 → semver_68
+```
+
+#### **Dates & Time (5 fields)**
+```
+date_69 → recentDate_70 → futureDate_71 → weekday_72 → month_73
+```
+
+#### **Text & Content (6 fields)**
+```
+description_74 → sentence_75 → paragraph_76 → words_77 → slug_78 → title_79
+```
+
+#### **Identification & Codes (9 fields)**
+```
+uuid_80 → nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 → imei_86 → creditCardCVV_87 → licenseNumber_88
+```
+
+### 💡 Example Usage
+
+**Requesting 5 fields will always produce:**
+```json
+{
+  "firstName_1": "John",
+  "lastName_2": "Doe", 
+  "fullName_3": "Jane Smith",
+  "middleName_4": "Michael",
+  "gender_5": "Female"
+}
+```
+
+**Requesting 15 fields will always start with the same 5, then continue:**
+```json
+{
+  "firstName_1": "John",
+  "lastName_2": "Doe",
+  "fullName_3": "Jane Smith", 
+  "middleName_4": "Michael",
+  "gender_5": "Female",
+  "birthDate_6": "1990-05-15",
+  "age_7": 32,
+  "bio_8": "software developer",
+  "jobTitle_9": "Senior Engineer",
+  "suffix_10": "Jr.",
+  "prefix_11": "Mr.",
+  "phone_12": "(555) 123-4567",
+  "phoneNumber_13": "+1-555-987-6543",
+  "address_14": "123 Main St",
+  "streetName_15": "Oak Avenue"
+}
+```
+
+**Cycling example - requesting 90 fields (cycles back after 88):**
+```json
+{
+  "firstName_1": "John",
+  "lastName_2": "Doe",
+  // ... fields 3-88 ...
+  "licenseNumber_88": "ABC123DEF",
+  "firstName_89": "Sarah",     // ← Cycles back to firstName
+  "lastName_90": "Wilson"     // ← Continues with lastName
+}
+```
+
+### ✅ Benefits
+
+- **🎯 Predictable API Responses**: Client applications can rely on consistent field positions
+- **🔄 Easier Data Processing**: Scripts and tools can expect fields in the same order every time
+- **🐛 Better Debugging**: Easier to spot patterns and troubleshoot issues
+- **📊 Consistent UI**: Frontend components can display data fields reliably
+
 ## 🔧 Configuration
 
 ### Server Configuration
@@ -148,7 +265,8 @@ The application generates various realistic field types:
 
 ### Validation Limits
 - Fields: 1-300
-- Nested Objects: 0-10  
+- Nested Objects: 0-10
+- Fields per Nested Object: 0-50
 - Nesting Depth: 0-5
 - Records: 1-1000
 

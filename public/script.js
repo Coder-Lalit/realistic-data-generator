@@ -17,16 +17,33 @@ document.addEventListener('DOMContentLoaded', function() {
     // Fetch configuration on page load
     fetchConfig();
 
+    // Add event listener for automatic field adjustment when nested objects change
+    const numObjectsInput = document.getElementById('numObjects');
+    const nestedFieldsInput = document.getElementById('nestedFields');
+    const numNestingInput = document.getElementById('numNesting');
+    
+    if (numObjectsInput && nestedFieldsInput && numNestingInput) {
+        numObjectsInput.addEventListener('input', function() {
+            const numObjects = parseInt(this.value) || 0;
+            
+            if (numObjects === 0) {
+                // If no nested objects, set both nested fields and nesting depth to 0
+                nestedFieldsInput.value = 0;
+                numNestingInput.value = 0;
+            }
+        });
+    }
+
     // Form submission handler
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
         
         const formData = {
-            numFields: parseInt(document.getElementById('numFields').value),
-            numObjects: parseInt(document.getElementById('numObjects').value),
-            numNesting: parseInt(document.getElementById('numNesting').value),
-            numRecords: parseInt(document.getElementById('numRecords').value),
-            nestedFields: parseInt(document.getElementById('nestedFields').value)
+            numFields: parseInt(document.getElementById('numFields').value) || 0,
+            numObjects: parseInt(document.getElementById('numObjects').value) || 0,
+            numNesting: parseInt(document.getElementById('numNesting').value) || 0,
+            numRecords: parseInt(document.getElementById('numRecords').value) || 0,
+            nestedFields: parseInt(document.getElementById('nestedFields').value) || 0
         };
 
         // Validate input using dynamic configuration
@@ -62,12 +79,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // Performance validation
-        const totalFields = formData.numFields * formData.numRecords;
-        if (totalFields > config.performance.maxTotalFields) {
-            showError(`Total fields (${totalFields}) exceeds maximum allowed (${config.performance.maxTotalFields}). Reduce fields or records.`);
-            return;
-        }
+        // Performance validation removed - no limits on total fields
 
         await generateData(formData);
     });
@@ -252,11 +264,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         numObjects: { min: 0, max: 10, default: 1 },
                         numNesting: { min: 0, max: 5, default: 1 },
                         numRecords: { min: 1, max: 1000, default: 10 },
-                        nestedFields: { min: 1, max: 50, default: 3 }
-                    },
-                    performance: {
-                        maxTotalFields: 500,
-                        maxDataSize: 50 * 1024 * 1024
+                        nestedFields: { min: 0, max: 50, default: 3 }
                     }
                 };
             }
@@ -269,11 +277,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     numObjects: { min: 0, max: 10, default: 1 },
                     numNesting: { min: 0, max: 5, default: 1 },
                     numRecords: { min: 1, max: 1000, default: 10 },
-                    nestedFields: { min: 1, max: 50, default: 3 }
-                },
-                performance: {
-                    maxTotalFields: 500,
-                    maxDataSize: 50 * 1024 * 1024
+                    nestedFields: { min: 0, max: 50, default: 3 }
                 }
             };
         }
