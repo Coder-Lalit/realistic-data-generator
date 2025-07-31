@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realistic Data Generator</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎲 Realistic Data Generator</h1>
+            <p>Generate realistic JSON data with customizable parameters</p>
+        </header>
+
+
+        <div class="form-section">
+            <form id="dataForm">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="numFields">Number of Fields</label>
+                        <input type="number" id="numFields" min="1" max="300" value="5" required>
+                        <small id="fieldsHelp">Loading limits...</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="numObjects">Number of Nested Objects</label>
+                        <input type="number" id="numObjects" min="0" max="10" value="2" required>
+                        <small id="objectsHelp">Loading limits...</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="numNesting">Nesting Depth</label>
+                        <input type="number" id="numNesting" min="0" max="5" value="2" required>
+                        <small id="nestingHelp">Loading limits...</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="numRecords">Number of Records</label>
+                        <input type="number" id="numRecords" min="1" max="1000" value="10" required>
+                        <small id="recordsHelp">Loading limits...</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="nestedFields">Fields per Nested Object</label>
+                        <input type="number" id="nestedFields" min="1" max="50" value="3" required>
+                        <small id="nestedFieldsHelp">Loading limits...</small>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" id="generateBtn">
+                        <span class="btn-icon">🎯</span>
+                        Generate Data
+                    </button>
+                    <button type="button" id="copyBtn" style="display: none;">
+                        <span class="btn-icon">📋</span>
+                        Copy JSON
+                    </button>
+                    <button type="button" id="downloadBtn" style="display: none;">
+                        <span class="btn-icon">💾</span>
+                        Download JSON
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <div id="loadingSection" class="loading-section" style="display: none;">
+            <div class="loader"></div>
+            <p>Generating your realistic data...</p>
+        </div>
+
+        <div id="resultSection" class="result-section" style="display: none;">
+            <div class="result-header">
+                <h3>Generated Data</h3>
+                <div class="result-stats">
+                    <span id="recordCount"></span>
+                    <span id="dataSize"></span>
+                </div>
+            </div>
+            <div class="json-container">
+                <pre id="jsonOutput"></pre>
+            </div>
+        </div>
+
+        <div id="errorSection" class="error-section" style="display: none;">
+            <h3>❌ Error</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html> 
