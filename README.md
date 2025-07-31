@@ -136,11 +136,12 @@ data-generator-project/
 
 The application generates various realistic field types:
 
+- **Unique Identifier**: UUID (always first field)
 - **Personal**: First name, last name, full name
 - **Contact**: Email, phone number, address
 - **Professional**: Company name, job title
-- **Technical**: UUID, dates, numbers, booleans
-- **Content**: Lorem ipsum descriptions
+- **Technical**: Dates, numbers, booleans, IDs
+- **Content**: Realistic descriptions and text
 
 ## 📋 Predictable Field Order
 
@@ -257,6 +258,7 @@ nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 → imei_86 
 
 ### ✅ Benefits
 
+- **🔑 Unique ID First**: Every record starts with a unique UUID identifier for easy tracking
 - **🎯 Predictable API Responses**: Client applications can rely on consistent field positions
 - **🔄 Easier Data Processing**: Scripts and tools can expect fields in the same order every time
 - **🐛 Better Debugging**: Easier to spot patterns and troubleshoot issues

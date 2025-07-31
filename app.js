@@ -178,16 +178,17 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
         obj[fieldName] = generateFieldValue(fieldType);
     }
 
-    // Generate nested objects
-    for (let i = 0; i < numObjects; i++) {
-        const objectName = `nested_object_${i + 1}`;
-        if (nestingLevel > 0) {
-            // Recursive nesting with configurable nested fields
-            const nestedObjects = Math.max(0, numObjects - 1);
-            obj[objectName] = generateObject(nestedFields, nestedObjects, nestingLevel - 1, nestedFields);
-        } else {
-            // Simple object with configurable number of fields
-            obj[objectName] = generateSimpleObject(nestedFields);
+    // Generate nested objects only if we should nest
+    if (nestingLevel > 0) {
+        for (let i = 0; i < numObjects; i++) {
+            const objectName = `nested_object_${i + 1}`;
+            if (nestingLevel > 1) {
+                // Recursive nesting with same number of objects at each level
+                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields);
+            } else {
+                // Last level: simple object with configurable number of fields
+                obj[objectName] = generateSimpleObject(nestedFields);
+            }
         }
     }
 
