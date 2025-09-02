@@ -2,6 +2,7 @@ const express = require('express');
 const { faker } = require('@faker-js/faker');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -84,6 +85,19 @@ const FIELD_TYPES = [
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+
+// Health check endpoint
+app.get('/ping', (req, res) => {
+    const status = {
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        version: '1.0.0',
+        environment: process.env.NODE_ENV || 'development'
+    };
+    res.json(status);
+});
 
 // Serve the main HTML file
 app.get('/', (req, res) => {
@@ -230,7 +244,8 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
     for (let i = 0; i < numFields; i++) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
-        obj[fieldName] = generateFieldValue(fieldType);
+        const rawValue = generateFieldValue(fieldType);
+        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue);
     }
 
     // Generate nested objects only if we should nest
@@ -258,10 +273,49 @@ function generateSimpleObject(numFields = 4) {
     for (let i = 0; i < numFields; i++) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
-        obj[fieldName] = generateFieldValue(fieldType);
+        const rawValue = generateFieldValue(fieldType);
+        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue);
     }
 
     return obj;
+}
+
+// Function to detect if text contains emoji characters
+function containsEmoji(text) {
+    if (typeof text !== 'string') return false;
+    
+    // Unicode ranges for emojis
+    const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1F018}-\u{1F270}]|[\u{238C}-\u{2454}]|[\u{20D0}-\u{20FF}]/gu;
+    
+    return emojiRegex.test(text);
+}
+
+// Function to remove emoji characters from text
+function removeEmojis(text) {
+    if (typeof text !== 'string') return text;
+    
+    // Unicode ranges for emojis
+    const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1F018}-\u{1F270}]|[\u{238C}-\u{2454}]|[\u{20D0}-\u{20FF}]/gu;
+    
+    return text.replace(emojiRegex, '').trim();
+}
+
+// Function to validate and clean field values
+function validateAndCleanFieldValue(fieldName, fieldValue) {
+    // Skip validation for fields that start with "emoji"
+    if (fieldName.toLowerCase().startsWith('emoji')) {
+        return fieldValue;
+    }
+    
+    // Check if the field contains emojis and remove them if found
+    if (containsEmoji(fieldValue)) {
+        console.log(`⚠️  Emoji detected in field '${fieldName}': ${fieldValue}`);
+        const cleanedValue = removeEmojis(fieldValue);
+        console.log(`✅ Cleaned field '${fieldName}': ${cleanedValue}`);
+        return cleanedValue;
+    }
+    
+    return fieldValue;
 }
 
 // Function to generate field values based on type
@@ -474,4 +528,26 @@ function generateFieldValue(fieldType) {
 
 app.listen(PORT, () => {
     console.log(`🚀 Data Generator Server running on http://localhost:${PORT}`);
+    
+    // Start health check ping every 5 minutes to keep app alive
+    setInterval(() => {
+        const options = {
+            hostname: 'localhost',
+            port: PORT,
+            path: '/ping',
+            method: 'GET'
+        };
+
+        const req = http.request(options, (res) => {
+            console.log(`📡 Health check ping: ${res.statusCode} at ${new Date().toISOString()}`);
+        });
+
+        req.on('error', (err) => {
+            console.error(`❌ Health check ping failed: ${err.message}`);
+        });
+
+        req.end();
+    }, 5 * 60 * 1000); // 5 minutes in milliseconds
+    
+    console.log(`💓 Health check ping scheduled every 5 minutes`);
 }); 
