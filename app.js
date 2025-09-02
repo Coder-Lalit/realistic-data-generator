@@ -98,29 +98,45 @@ function generateFieldLengthMap() {
         switch (fieldType) {
             case 'uuid':
             case 'nanoid':
-                minLength = 8;
-                maxLength = 12;
+                // These will be skipped anyway, but set reasonable defaults
+                minLength = 36;
+                maxLength = 36;
                 break;
             case 'firstName':
             case 'lastName':
             case 'middleName':
-                minLength = 4;
-                maxLength = 10;
+                minLength = 6;
+                maxLength = 12;
+                break;
+            case 'fullName':
+                minLength = 10;
+                maxLength = 18;
                 break;
             case 'email':
             case 'website':
-                minLength = 15;
-                maxLength = 25;
+                minLength = 18;
+                maxLength = 30;
                 break;
             case 'address':
             case 'description':
             case 'paragraph':
-                minLength = 20;
-                maxLength = 40;
+                minLength = 25;
+                maxLength = 50;
                 break;
             case 'phone':
             case 'phoneNumber':
-                minLength = 10;
+                minLength = 12;
+                maxLength = 17;
+                break;
+            case 'company':
+            case 'jobTitle':
+                minLength = 8;
+                maxLength = 20;
+                break;
+            case 'city':
+            case 'state':
+            case 'country':
+                minLength = 5;
                 maxLength = 15;
                 break;
             case 'zipCode':
@@ -139,8 +155,8 @@ function generateFieldLengthMap() {
                 maxLength = 5;
                 break;
             default:
-                minLength = 6;
-                maxLength = 15;
+                minLength = 8;
+                maxLength = 20;
                 break;
         }
         
@@ -384,6 +400,11 @@ function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
         return fieldValue; // No length enforcement
     }
     
+    // Skip UUID fields - they should keep their natural length
+    if (fieldType === 'uuid' || fieldType === 'nanoid') {
+        return fieldValue;
+    }
+    
     const targetLength = FIELD_LENGTH_MAP[fieldType];
     
     // Convert to string if not already
@@ -393,8 +414,13 @@ function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
         // Truncate and add ellipsis if too long
         return stringValue.substring(0, targetLength - 3) + '...';
     } else if (stringValue.length < targetLength) {
-        // Pad with spaces if too short
-        return stringValue.padEnd(targetLength, ' ');
+        // For names and text fields, don't pad with spaces - just truncate if needed
+        // Only pad for certain field types that benefit from fixed width
+        if (['number', 'age', 'rating', 'port', 'zipCode'].includes(fieldType)) {
+            return stringValue.padEnd(targetLength, ' ');
+        }
+        // For other fields, keep natural length if shorter than target
+        return stringValue;
     }
     
     return stringValue;
