@@ -36,9 +36,7 @@ const CONFIG = {
             default: 3
         },
         uniformFieldLength: {
-            min: 0,
-            max: 500,
-            default: 0  // 0 means no uniform length enforcement
+            default: false  // boolean flag to enable uniform field lengths across records
         }
     }
 };
@@ -85,6 +83,74 @@ const FIELD_TYPES = [
     'nanoid', 'color', 'hexColor', 'number', 'boolean',
     'imei', 'creditCardCVV', 'licenseNumber'
 ];
+
+// Global variable to store field length mappings for uniform length mode
+let FIELD_LENGTH_MAP = {};
+
+// Function to generate random field length map
+function generateFieldLengthMap() {
+    const lengthMap = {};
+    
+    for (const fieldType of FIELD_TYPES) {
+        // Generate random lengths based on typical field type characteristics
+        let minLength, maxLength;
+        
+        switch (fieldType) {
+            case 'uuid':
+            case 'nanoid':
+                minLength = 8;
+                maxLength = 12;
+                break;
+            case 'firstName':
+            case 'lastName':
+            case 'middleName':
+                minLength = 4;
+                maxLength = 10;
+                break;
+            case 'email':
+            case 'website':
+                minLength = 15;
+                maxLength = 25;
+                break;
+            case 'address':
+            case 'description':
+            case 'paragraph':
+                minLength = 20;
+                maxLength = 40;
+                break;
+            case 'phone':
+            case 'phoneNumber':
+                minLength = 10;
+                maxLength = 15;
+                break;
+            case 'zipCode':
+            case 'currency':
+                minLength = 3;
+                maxLength = 8;
+                break;
+            case 'age':
+            case 'rating':
+            case 'number':
+                minLength = 1;
+                maxLength = 4;
+                break;
+            case 'boolean':
+                minLength = 4;
+                maxLength = 5;
+                break;
+            default:
+                minLength = 6;
+                maxLength = 15;
+                break;
+        }
+        
+        // Generate random length within the range
+        lengthMap[fieldType] = Math.floor(Math.random() * (maxLength - minLength + 1)) + minLength;
+    }
+    
+    console.log('🎲 Generated field length map:', lengthMap);
+    return lengthMap;
+}
 
 // Middleware
 app.use(cors());
@@ -166,12 +232,6 @@ app.post('/generate-data', (req, res) => {
             });
         }
 
-        if (finalUniformLength < limits.uniformFieldLength.min || finalUniformLength > limits.uniformFieldLength.max) {
-            return res.status(400).json({ 
-                error: `Uniform field length must be between ${limits.uniformFieldLength.min} and ${limits.uniformFieldLength.max}` 
-            });
-        }
-
         // Performance validation removed - no limits on total fields
 
         const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
@@ -230,12 +290,6 @@ app.post('/data', (req, res) => {
             });
         }
 
-        if (finalUniformLength < limits.uniformFieldLength.min || finalUniformLength > limits.uniformFieldLength.max) {
-            return res.status(400).json({ 
-                error: `Uniform field length must be between ${limits.uniformFieldLength.min} and ${limits.uniformFieldLength.max}` 
-            });
-        }
-
         const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
         res.json(data); // Return only the data array
     } catch (error) {
@@ -244,11 +298,16 @@ app.post('/data', (req, res) => {
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, uniformLength = 0) {
+function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false) {
     const records = [];
 
+    // Generate field length map if uniform length is requested
+    if (useUniformLength) {
+        FIELD_LENGTH_MAP = generateFieldLengthMap();
+    }
+
     for (let i = 0; i < numRecords; i++) {
-        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, uniformLength);
+        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength);
         records.push(record);
     }
 
@@ -256,7 +315,7 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
 }
 
 // Function to generate a single object with specified parameters
-function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, uniformLength = 0) {
+function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, useUniformLength = false) {
     const obj = {};
 
     // Generate basic fields using the global FIELD_TYPES array for consistent ordering
@@ -264,7 +323,7 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, u
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
         const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, uniformLength);
+        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, fieldType, useUniformLength);
     }
 
     // Generate nested objects only if we should nest
@@ -273,10 +332,10 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, u
             const objectName = `nested_object_${i + 1}`;
             if (nestingLevel > 1) {
                 // Recursive nesting with same number of objects at each level
-                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields, uniformLength);
+                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields, useUniformLength);
             } else {
                 // Last level: simple object with configurable number of fields
-                obj[objectName] = generateSimpleObject(nestedFields, uniformLength);
+                obj[objectName] = generateSimpleObject(nestedFields, useUniformLength);
             }
         }
     }
@@ -285,7 +344,7 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, u
 }
 
 // Function to generate a simple object (no nesting)
-function generateSimpleObject(numFields = 4, uniformLength = 0) {
+function generateSimpleObject(numFields = 4, useUniformLength = false) {
     const obj = {};
 
     // Use the same global FIELD_TYPES array for consistent ordering
@@ -293,7 +352,7 @@ function generateSimpleObject(numFields = 4, uniformLength = 0) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
         const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, uniformLength);
+        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, fieldType, useUniformLength);
     }
 
     return obj;
@@ -319,11 +378,13 @@ function removeEmojis(text) {
     return text.replace(emojiRegex, '').trim();
 }
 
-// Function to enforce uniform field length
-function enforceUniformLength(fieldValue, targetLength) {
-    if (targetLength <= 0) {
+// Function to enforce uniform field length based on field type
+function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
+    if (!useUniformLength || !FIELD_LENGTH_MAP[fieldType]) {
         return fieldValue; // No length enforcement
     }
+    
+    const targetLength = FIELD_LENGTH_MAP[fieldType];
     
     // Convert to string if not already
     let stringValue = String(fieldValue);
@@ -340,7 +401,7 @@ function enforceUniformLength(fieldValue, targetLength) {
 }
 
 // Function to validate and clean field values
-function validateAndCleanFieldValue(fieldName, fieldValue, uniformLength = 0) {
+function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniformLength = false) {
     let processedValue = fieldValue;
     
     // Skip emoji validation for fields that start with "emoji"
@@ -354,11 +415,12 @@ function validateAndCleanFieldValue(fieldName, fieldValue, uniformLength = 0) {
     }
     
     // Apply uniform length if specified
-    if (uniformLength > 0) {
+    if (useUniformLength && FIELD_LENGTH_MAP[fieldType]) {
         const originalLength = String(processedValue).length;
-        processedValue = enforceUniformLength(processedValue, uniformLength);
-        if (originalLength !== uniformLength) {
-            console.log(`📏 Adjusted field '${fieldName}' length: ${originalLength} → ${uniformLength}`);
+        const targetLength = FIELD_LENGTH_MAP[fieldType];
+        processedValue = enforceUniformLength(processedValue, fieldType, useUniformLength);
+        if (originalLength !== targetLength) {
+            console.log(`📏 Adjusted field '${fieldName}' (${fieldType}) length: ${originalLength} → ${targetLength}`);
         }
     }
     
