@@ -34,6 +34,11 @@ const CONFIG = {
             min: 0,
             max: 50,
             default: 3
+        },
+        uniformFieldLength: {
+            min: 0,
+            max: 500,
+            default: 0  // 0 means no uniform length enforcement
         }
     }
 };
@@ -115,10 +120,11 @@ app.get('/config', (req, res) => {
 // Data generation endpoint
 app.post('/generate-data', (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
 
-        // Set default for nestedFields if not provided
+        // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
 
         // Validate input
         if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
@@ -160,9 +166,15 @@ app.post('/generate-data', (req, res) => {
             });
         }
 
+        if (finalUniformLength < limits.uniformFieldLength.min || finalUniformLength > limits.uniformFieldLength.max) {
+            return res.status(400).json({ 
+                error: `Uniform field length must be between ${limits.uniformFieldLength.min} and ${limits.uniformFieldLength.max}` 
+            });
+        }
+
         // Performance validation removed - no limits on total fields
 
-        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields);
+        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
         res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -172,10 +184,11 @@ app.post('/generate-data', (req, res) => {
 // Data-only endpoint (returns only data array without success wrapper)
 app.post('/data', (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
 
-        // Set default for nestedFields if not provided
+        // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
 
         // Validate input
         if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
@@ -217,7 +230,13 @@ app.post('/data', (req, res) => {
             });
         }
 
-        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields);
+        if (finalUniformLength < limits.uniformFieldLength.min || finalUniformLength > limits.uniformFieldLength.max) {
+            return res.status(400).json({ 
+                error: `Uniform field length must be between ${limits.uniformFieldLength.min} and ${limits.uniformFieldLength.max}` 
+            });
+        }
+
+        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
         res.json(data); // Return only the data array
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -225,11 +244,11 @@ app.post('/data', (req, res) => {
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields) {
+function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, uniformLength = 0) {
     const records = [];
 
     for (let i = 0; i < numRecords; i++) {
-        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields);
+        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, uniformLength);
         records.push(record);
     }
 
@@ -237,7 +256,7 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
 }
 
 // Function to generate a single object with specified parameters
-function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
+function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, uniformLength = 0) {
     const obj = {};
 
     // Generate basic fields using the global FIELD_TYPES array for consistent ordering
@@ -245,7 +264,7 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
         const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue);
+        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, uniformLength);
     }
 
     // Generate nested objects only if we should nest
@@ -254,10 +273,10 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
             const objectName = `nested_object_${i + 1}`;
             if (nestingLevel > 1) {
                 // Recursive nesting with same number of objects at each level
-                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields);
+                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields, uniformLength);
             } else {
                 // Last level: simple object with configurable number of fields
-                obj[objectName] = generateSimpleObject(nestedFields);
+                obj[objectName] = generateSimpleObject(nestedFields, uniformLength);
             }
         }
     }
@@ -266,7 +285,7 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3) {
 }
 
 // Function to generate a simple object (no nesting)
-function generateSimpleObject(numFields = 4) {
+function generateSimpleObject(numFields = 4, uniformLength = 0) {
     const obj = {};
 
     // Use the same global FIELD_TYPES array for consistent ordering
@@ -274,7 +293,7 @@ function generateSimpleObject(numFields = 4) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
         const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue);
+        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, uniformLength);
     }
 
     return obj;
@@ -300,22 +319,50 @@ function removeEmojis(text) {
     return text.replace(emojiRegex, '').trim();
 }
 
+// Function to enforce uniform field length
+function enforceUniformLength(fieldValue, targetLength) {
+    if (targetLength <= 0) {
+        return fieldValue; // No length enforcement
+    }
+    
+    // Convert to string if not already
+    let stringValue = String(fieldValue);
+    
+    if (stringValue.length > targetLength) {
+        // Truncate and add ellipsis if too long
+        return stringValue.substring(0, targetLength - 3) + '...';
+    } else if (stringValue.length < targetLength) {
+        // Pad with spaces if too short
+        return stringValue.padEnd(targetLength, ' ');
+    }
+    
+    return stringValue;
+}
+
 // Function to validate and clean field values
-function validateAndCleanFieldValue(fieldName, fieldValue) {
-    // Skip validation for fields that start with "emoji"
-    if (fieldName.toLowerCase().startsWith('emoji')) {
-        return fieldValue;
+function validateAndCleanFieldValue(fieldName, fieldValue, uniformLength = 0) {
+    let processedValue = fieldValue;
+    
+    // Skip emoji validation for fields that start with "emoji"
+    if (!fieldName.toLowerCase().startsWith('emoji')) {
+        // Check if the field contains emojis and remove them if found
+        if (containsEmoji(processedValue)) {
+            console.log(`⚠️  Emoji detected in field '${fieldName}': ${processedValue}`);
+            processedValue = removeEmojis(processedValue);
+            console.log(`✅ Cleaned field '${fieldName}': ${processedValue}`);
+        }
     }
     
-    // Check if the field contains emojis and remove them if found
-    if (containsEmoji(fieldValue)) {
-        console.log(`⚠️  Emoji detected in field '${fieldName}': ${fieldValue}`);
-        const cleanedValue = removeEmojis(fieldValue);
-        console.log(`✅ Cleaned field '${fieldName}': ${cleanedValue}`);
-        return cleanedValue;
+    // Apply uniform length if specified
+    if (uniformLength > 0) {
+        const originalLength = String(processedValue).length;
+        processedValue = enforceUniformLength(processedValue, uniformLength);
+        if (originalLength !== uniformLength) {
+            console.log(`📏 Adjusted field '${fieldName}' length: ${originalLength} → ${uniformLength}`);
+        }
     }
     
-    return fieldValue;
+    return processedValue;
 }
 
 // Function to generate field values based on type
