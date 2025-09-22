@@ -147,10 +147,11 @@ function storeSchemaInCache(sessionId, config, fieldLengthMap) {
     SCHEMA_CACHE.set(sessionId, {
         config,
         fieldLengthMap,
+        hasFixedFieldLength: config.uniformFieldLength, // Store the Fixed Field Length flag
         expiresAt,
         createdAt: Date.now()
     });
-    logger.info(`Schema stored for session: ${sessionId.slice(-8)} (TTL: 10min)`);
+    logger.info(`Schema stored for session: ${sessionId.slice(-8)} (TTL: 10min, Fixed Length: ${!!config.uniformFieldLength})`);
     
     // Clean expired schemas periodically
     cleanExpiredSchemas();
@@ -552,7 +553,7 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
             });
         }
 
-        const { config, fieldLengthMap } = cachedData;
+        const { config, fieldLengthMap, hasFixedFieldLength } = cachedData;
         const { numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = config;
 
         // Calculate pagination
@@ -569,12 +570,20 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
         const startIndex = (pageNumber - 1) * pageSize;
         const recordsToGenerate = Math.min(pageSize, totalRecords - startIndex);
 
-        // Set the cached field length map for consistent generation
-        if (fieldLengthMap) {
-            FIELD_LENGTH_MAP = fieldLengthMap;
+        // Determine schema behavior based on Fixed Field Length flag
+        if (hasFixedFieldLength) {
+            // Honor cached field length map for consistent generation
+            if (fieldLengthMap) {
+                FIELD_LENGTH_MAP = fieldLengthMap;
+            }
+            logger.debug(`Using cached field length map for session: ${sessionId.slice(-8)}`);
+        } else {
+            // Completely bypass schema - no field length map or processing
+            FIELD_LENGTH_MAP = null;
+            logger.debug(`Generating natural data without any schema for session: ${sessionId.slice(-8)}`);
         }
 
-        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, uniformFieldLength);
+        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, hasFixedFieldLength);
 
         // Generate URLs for navigation
         const baseUrl = `${req.protocol}://${req.get('host')}/generate-paginated/${sessionId}`;
@@ -608,9 +617,18 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
 function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false) {
     const records = [];
 
-    // Generate field length map if uniform length is requested
+    // Handle schema generation based on useUniformLength flag
     if (useUniformLength) {
-        FIELD_LENGTH_MAP = generateFieldLengthMap();
+        // Only generate new map if no map exists (for initial session creation)
+        if (!FIELD_LENGTH_MAP || Object.keys(FIELD_LENGTH_MAP).length === 0) {
+            FIELD_LENGTH_MAP = generateFieldLengthMap();
+            logger.debug(`Generated new field length map for uniform length data`);
+        }
+    } else {
+        // For non-uniform length, completely skip schema generation
+        // Just generate natural data without any length processing
+        FIELD_LENGTH_MAP = null;
+        logger.debug(`Generating natural data without any schema or length processing`);
     }
 
     for (let i = 0; i < numRecords; i++) {
@@ -687,8 +705,8 @@ function removeEmojis(text) {
 
 // Function to enforce uniform field length based on field type
 function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
-    if (!useUniformLength || !FIELD_LENGTH_MAP.hasOwnProperty(fieldType) || FIELD_LENGTH_MAP[fieldType] === null) {
-        return fieldValue; // No length enforcement or special null marker
+    if (!useUniformLength || !FIELD_LENGTH_MAP || !FIELD_LENGTH_MAP.hasOwnProperty(fieldType) || FIELD_LENGTH_MAP[fieldType] === null) {
+        return fieldValue; // No length enforcement, no map, or special null marker
     }
     
     const targetLength = FIELD_LENGTH_MAP[fieldType];
@@ -738,8 +756,8 @@ function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniform
         }
     }
     
-    // Apply uniform length if specified
-    if (useUniformLength && FIELD_LENGTH_MAP.hasOwnProperty(fieldType) && FIELD_LENGTH_MAP[fieldType] !== null) {
+    // Apply uniform length if specified and field length map exists
+    if (useUniformLength && FIELD_LENGTH_MAP && FIELD_LENGTH_MAP.hasOwnProperty(fieldType) && FIELD_LENGTH_MAP[fieldType] !== null) {
         const originalLength = String(processedValue).length;
         const targetLength = FIELD_LENGTH_MAP[fieldType];
         processedValue = enforceUniformLength(processedValue, fieldType, useUniformLength);
