@@ -130,6 +130,24 @@ function generateSessionId() {
     return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
+// Function to generate deterministic seed for pagination
+function generatePageSeed(sessionId, pageNumber) {
+    // Create a consistent seed based on session ID and page number
+    const sessionHash = sessionId.split('_').pop(); // Get the random part
+    const pageHash = pageNumber.toString();
+    const combinedString = sessionHash + pageHash;
+    
+    // Simple hash function to convert string to number
+    let hash = 0;
+    for (let i = 0; i < combinedString.length; i++) {
+        const char = combinedString.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    return Math.abs(hash);
+}
+
 // Function to clean expired schemas from cache
 function cleanExpiredSchemas() {
     const now = Date.now();
@@ -501,7 +519,9 @@ app.post('/generate-paginated', (req, res) => {
             FIELD_LENGTH_MAP = fieldLengthMap;
         }
 
-        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, finalNestedFields, finalUniformLength);
+        // Generate deterministic data for first page
+        const seed = generatePageSeed(sessionId, 1);
+        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, finalNestedFields, finalUniformLength, seed);
         
         // Calculate pagination info
         const totalPages = Math.ceil(totalRecords / pageSize);
@@ -583,7 +603,9 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
             logger.debug(`Generating natural data without any schema for session: ${sessionId.slice(-8)}`);
         }
 
-        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, hasFixedFieldLength);
+        // Generate deterministic data for pagination consistency
+        const seed = generatePageSeed(sessionId, pageNumber);
+        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, hasFixedFieldLength, seed);
 
         // Generate URLs for navigation
         const baseUrl = `${req.protocol}://${req.get('host')}/generate-paginated/${sessionId}`;
@@ -614,7 +636,7 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false) {
+function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, seed = null) {
     const records = [];
 
     // Handle schema generation based on useUniformLength flag
@@ -631,7 +653,19 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
         logger.debug(`Generating natural data without any schema or length processing`);
     }
 
+    // Set seed for deterministic generation (pagination consistency)
+    if (seed !== null) {
+        faker.seed(seed);
+        logger.debug(`Using deterministic seed: ${seed} for consistent data generation`);
+    }
+
     for (let i = 0; i < numRecords; i++) {
+        // For pagination, create a unique seed for each record based on base seed + index
+        if (seed !== null) {
+            // Create deterministic seed for this specific record
+            faker.seed(seed + (i * 1000)); // Multiply by 1000 to ensure distinct seeds
+        }
+        
         const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength);
         records.push(record);
     }
@@ -727,11 +761,12 @@ function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
             return stringValue.padEnd(targetLength, ' ');
         }
         // For text fields, generate additional content to reach target length
-        if (['firstName', 'lastName', 'middleName', 'city', 'state', 'country'].includes(fieldType)) {
-            // For names, add random characters
+        if (['firstName', 'lastName', 'fullName', 'middleName', 'city', 'state', 'country'].includes(fieldType)) {
+            // For names, add random characters using seeded faker for consistency
             const additionalChars = 'abcdefghijklmnopqrstuvwxyz';
             while (stringValue.length < targetLength) {
-                stringValue += additionalChars[Math.floor(Math.random() * additionalChars.length)];
+                const randomIndex = Math.floor(faker.number.float({ min: 0, max: 1 }) * additionalChars.length);
+                stringValue += additionalChars[randomIndex];
             }
             return stringValue;
         }
