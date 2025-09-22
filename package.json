@@ -5,7 +5,11 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "test": "node tests/run-all-tests.js",
+    "test:fixed": "node tests/test-fixed-length-pagination.js",
+    "test:natural": "node tests/test-natural-length-pagination.js",
+    "test:compare": "node tests/test-comprehensive-comparison.js"
   },
   "keywords": ["data-generator", "faker", "json", "realistic-data"],
   "author": "",
