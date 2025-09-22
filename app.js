@@ -527,9 +527,11 @@ app.post('/generate-paginated', (req, res) => {
         const totalPages = Math.ceil(totalRecords / pageSize);
         const hasNextPage = totalRecords > pageSize;
 
-        // Generate URLs for navigation (relative paths)
-        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}/2` : null;
+        // Generate URLs for navigation (POST endpoints without page numbers)
+        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}` : null;
         const prevUrl = null; // First page has no previous
+        const nextPageNumber = hasNextPage ? 2 : null;
+        const prevPageNumber = null;
 
         res.json({
             success: true,
@@ -544,7 +546,9 @@ app.post('/generate-paginated', (req, res) => {
                 hasNextPage,
                 hasPreviousPage: false,
                 nextUrl,
-                prevUrl
+                prevUrl,
+                nextPageNumber,
+                prevPageNumber
             }
         });
     } catch (error) {
@@ -552,15 +556,23 @@ app.post('/generate-paginated', (req, res) => {
     }
 });
 
-// Get next page using session ID
-app.get('/generate-paginated/:sessionId/:page', (req, res) => {
+// Get specific page using session ID and POST payload
+app.post('/generate-paginated/:sessionId', (req, res) => {
     try {
-        const { sessionId, page } = req.params;
-        const pageNumber = parseInt(page);
-
+        const { sessionId } = req.params;
+        const { pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = req.body;
+        
+        // Validate required POST parameters
         if (!pageNumber || pageNumber < 1) {
             return res.status(400).json({ 
                 error: 'Invalid page number. Must be a positive integer.' 
+            });
+        }
+        
+        if (numFields === undefined || numObjects === undefined || numNesting === undefined || 
+            totalRecords === undefined || nestedFields === undefined || uniformFieldLength === undefined) {
+            return res.status(400).json({ 
+                error: 'Missing required parameters: numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength' 
             });
         }
 
@@ -573,7 +585,8 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
         }
 
         const { config, fieldLengthMap, hasFixedFieldLength } = cachedData;
-        const { numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = config;
+        // Use the POST body parameters, but validate against cached config for consistency
+        const cachedConfig = config;
 
         // Calculate pagination
         const pageSize = 100;
@@ -606,11 +619,13 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
         const seed = generatePageSeed(sessionId, pageNumber);
         const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, hasFixedFieldLength, seed);
 
-        // Generate URLs for navigation
+        // Generate URLs for navigation (POST endpoints without page numbers)
         const hasNextPage = pageNumber < totalPages;
         const hasPreviousPage = pageNumber > 1;
-        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}/${pageNumber + 1}` : null;
-        const prevUrl = hasPreviousPage ? `/generate-paginated/${sessionId}/${pageNumber - 1}` : null;
+        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}` : null;
+        const prevUrl = hasPreviousPage ? `/generate-paginated/${sessionId}` : null;
+        const nextPageNumber = hasNextPage ? pageNumber + 1 : null;
+        const prevPageNumber = hasPreviousPage ? pageNumber - 1 : null;
 
         res.json({
             success: true,
@@ -625,7 +640,9 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
                 hasNextPage,
                 hasPreviousPage,
                 nextUrl,
-                prevUrl
+                prevUrl,
+                nextPageNumber,
+                prevPageNumber
             }
         });
     } catch (error) {

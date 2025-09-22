@@ -283,7 +283,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 generatedData = result.data;
                 currentSession = {
                     sessionId: result.sessionId,
-                    pagination: result.pagination
+                    pagination: result.pagination,
+                    originalPayload: formData  // Store original form data for POST requests
                 };
                 
                 if (isLargeDataset) {
@@ -314,7 +315,19 @@ document.addEventListener('DOMContentLoaded', function() {
         showLoading();
         
         try {
-            const response = await fetch(`/generate-paginated/${currentSession.sessionId}/${pageNumber}`);
+            // Create POST payload with original form data + page number
+            const pagePayload = {
+                ...currentSession.originalPayload,
+                pageNumber: pageNumber
+            };
+
+            const response = await fetch(`/generate-paginated/${currentSession.sessionId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(pagePayload)
+            });
             const result = await response.json();
 
             if (response.ok && result.success) {

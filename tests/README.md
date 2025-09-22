@@ -238,6 +238,7 @@ const LOG_LEVEL = 'DEBUG'; // Shows detailed field processing
 - **Comparison**: ✅ PASSED (Both modes excellent)
 - **Performance**: ✅ 17-20ms response times
 - **URLs**: ✅ Relative paths (no domain prefix)
+- **Method**: ✅ POST requests with payload (September 22, 2025)
 
 ### Key Fixes Applied
 1. **Fixed fullName field length enforcement** (missing from padding logic)

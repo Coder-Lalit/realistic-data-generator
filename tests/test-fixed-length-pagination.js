@@ -117,7 +117,12 @@ async function testFixedLengthPagination() {
                 if (pageNum === 1) {
                     pageData = firstPageData; // Use already fetched data
                 } else {
-                    const pageResponse = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}/${pageNum}`);
+                    // Create POST payload for page request
+                    const pagePayload = {
+                        ...sessionData,
+                        pageNumber: pageNum
+                    };
+                    const pageResponse = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
                     if (!pageResponse.success) {
                         throw new Error(`Page ${pageNum} request failed: ${pageResponse.error}`);
                     }
@@ -198,7 +203,11 @@ async function testFixedLengthPagination() {
         const multipleCalls = [];
         
         for (let i = 0; i < 3; i++) {
-            const response = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}/${testPage}`);
+            const pagePayload = {
+                ...sessionData,
+                pageNumber: testPage
+            };
+            const response = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
             if (response.success && response.data.length > 0) {
                 multipleCalls.push({
                     call: i + 1,
