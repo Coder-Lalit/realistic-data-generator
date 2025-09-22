@@ -157,6 +157,15 @@ async function testFixedLengthPagination() {
 
         // Step 4: Report results
         console.log();
+        // Verify relative URLs
+        console.log('🔗 URL Format Check:');
+        if (sessionResponse.pagination.nextUrl && sessionResponse.pagination.nextUrl.startsWith('/')) {
+            console.log('✅ nextUrl is relative path (no domain)');
+        } else {
+            console.log('❌ nextUrl should be relative path');
+        }
+        console.log();
+        
         console.log('📊 FIXED LENGTH CONSISTENCY RESULTS:');
         console.log('===================================');
         

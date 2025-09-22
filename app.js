@@ -527,9 +527,8 @@ app.post('/generate-paginated', (req, res) => {
         const totalPages = Math.ceil(totalRecords / pageSize);
         const hasNextPage = totalRecords > pageSize;
 
-        // Generate URLs for navigation
-        const baseUrl = `${req.protocol}://${req.get('host')}/generate-paginated/${sessionId}`;
-        const nextUrl = hasNextPage ? `${baseUrl}/2` : null;
+        // Generate URLs for navigation (relative paths)
+        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}/2` : null;
         const prevUrl = null; // First page has no previous
 
         res.json({
@@ -608,11 +607,10 @@ app.get('/generate-paginated/:sessionId/:page', (req, res) => {
         const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, hasFixedFieldLength, seed);
 
         // Generate URLs for navigation
-        const baseUrl = `${req.protocol}://${req.get('host')}/generate-paginated/${sessionId}`;
         const hasNextPage = pageNumber < totalPages;
         const hasPreviousPage = pageNumber > 1;
-        const nextUrl = hasNextPage ? `${baseUrl}/${pageNumber + 1}` : null;
-        const prevUrl = hasPreviousPage ? `${baseUrl}/${pageNumber - 1}` : null;
+        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}/${pageNumber + 1}` : null;
+        const prevUrl = hasPreviousPage ? `/generate-paginated/${sessionId}/${pageNumber - 1}` : null;
 
         res.json({
             success: true,

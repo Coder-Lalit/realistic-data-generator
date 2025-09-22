@@ -237,6 +237,7 @@ const LOG_LEVEL = 'DEBUG'; // Shows detailed field processing
 - **Natural Length**: ✅ PASSED (Natural variation + determinism)
 - **Comparison**: ✅ PASSED (Both modes excellent)
 - **Performance**: ✅ 17-20ms response times
+- **URLs**: ✅ Relative paths (no domain prefix)
 
 ### Key Fixes Applied
 1. **Fixed fullName field length enforcement** (missing from padding logic)
