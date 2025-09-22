@@ -87,6 +87,57 @@ const FIELD_TYPES = [
 // Global variable to store field length mappings for uniform length mode
 let FIELD_LENGTH_MAP = {};
 
+// Schema cache for pagination with TTL (10 minutes)
+const SCHEMA_CACHE = new Map();
+const SCHEMA_TTL = 10 * 60 * 1000; // 10 minutes in milliseconds
+
+// Function to generate unique session ID
+function generateSessionId() {
+    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Function to clean expired schemas from cache
+function cleanExpiredSchemas() {
+    const now = Date.now();
+    for (const [sessionId, data] of SCHEMA_CACHE.entries()) {
+        if (now > data.expiresAt) {
+            SCHEMA_CACHE.delete(sessionId);
+            console.log(`🗑️  Expired schema removed: ${sessionId}`);
+        }
+    }
+}
+
+// Function to store schema in cache
+function storeSchemaInCache(sessionId, config, fieldLengthMap) {
+    const expiresAt = Date.now() + SCHEMA_TTL;
+    SCHEMA_CACHE.set(sessionId, {
+        config,
+        fieldLengthMap,
+        expiresAt,
+        createdAt: Date.now()
+    });
+    console.log(`💾 Schema stored for session: ${sessionId} (expires at ${new Date(expiresAt).toISOString()})`);
+    
+    // Clean expired schemas periodically
+    cleanExpiredSchemas();
+}
+
+// Function to retrieve schema from cache
+function getSchemaFromCache(sessionId) {
+    const data = SCHEMA_CACHE.get(sessionId);
+    if (!data) {
+        return null;
+    }
+    
+    if (Date.now() > data.expiresAt) {
+        SCHEMA_CACHE.delete(sessionId);
+        console.log(`⏰ Schema expired and removed: ${sessionId}`);
+        return null;
+    }
+    
+    return data;
+}
+
 // Function to generate random field length map
 function generateFieldLengthMap() {
     const lengthMap = {};
@@ -322,6 +373,190 @@ app.post('/data', (req, res) => {
 
         const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
         res.json(data); // Return only the data array
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Paginated data generation endpoint - creates session and returns first page
+app.post('/generate-paginated', (req, res) => {
+    try {
+        const { numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = req.body;
+
+        // Set defaults if not provided
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+
+        // Validate input
+        if (!numFields || numObjects === undefined || numNesting === undefined || !totalRecords) {
+            return res.status(400).json({ 
+                error: 'Missing required parameters: numFields, numObjects, numNesting, totalRecords' 
+            });
+        }
+
+        // Validate limits using configuration
+        const limits = CONFIG.limits;
+        
+        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+            return res.status(400).json({ 
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
+            });
+        }
+
+        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+            return res.status(400).json({ 
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
+            });
+        }
+
+        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+            return res.status(400).json({ 
+                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
+            });
+        }
+
+        if (totalRecords < 1 || totalRecords > 100000) {
+            return res.status(400).json({ 
+                error: 'Total records must be between 1 and 100,000 for pagination' 
+            });
+        }
+
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({ 
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
+            });
+        }
+
+        // Generate session ID
+        const sessionId = generateSessionId();
+        
+        // Store configuration and field length schema
+        const sessionConfig = {
+            numFields,
+            numObjects,
+            numNesting,
+            totalRecords,
+            nestedFields: finalNestedFields,
+            uniformFieldLength: finalUniformLength
+        };
+
+        // Generate field length map if uniform length is requested
+        let fieldLengthMap = null;
+        if (finalUniformLength) {
+            fieldLengthMap = generateFieldLengthMap();
+        }
+
+        // Store in cache
+        storeSchemaInCache(sessionId, sessionConfig, fieldLengthMap);
+
+        // Generate first page (100 records max)
+        const pageSize = 100;
+        const recordsToGenerate = Math.min(pageSize, totalRecords);
+        
+        // Temporarily set the global field length map for this generation
+        if (fieldLengthMap) {
+            FIELD_LENGTH_MAP = fieldLengthMap;
+        }
+
+        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, finalNestedFields, finalUniformLength);
+        
+        // Calculate pagination info
+        const totalPages = Math.ceil(totalRecords / pageSize);
+        const hasNextPage = totalRecords > pageSize;
+
+        // Generate URLs for navigation
+        const baseUrl = `${req.protocol}://${req.get('host')}/generate-paginated/${sessionId}`;
+        const nextUrl = hasNextPage ? `${baseUrl}/2` : null;
+        const prevUrl = null; // First page has no previous
+
+        res.json({
+            success: true,
+            sessionId,
+            data,
+            pagination: {
+                currentPage: 1,
+                totalPages,
+                totalRecords,
+                recordsPerPage: pageSize,
+                recordsInCurrentPage: recordsToGenerate,
+                hasNextPage,
+                hasPreviousPage: false,
+                nextUrl,
+                prevUrl
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get next page using session ID
+app.get('/generate-paginated/:sessionId/:page', (req, res) => {
+    try {
+        const { sessionId, page } = req.params;
+        const pageNumber = parseInt(page);
+
+        if (!pageNumber || pageNumber < 1) {
+            return res.status(400).json({ 
+                error: 'Invalid page number. Must be a positive integer.' 
+            });
+        }
+
+        // Retrieve schema from cache
+        const cachedData = getSchemaFromCache(sessionId);
+        if (!cachedData) {
+            return res.status(404).json({ 
+                error: 'Session not found or expired. Please start a new pagination session.' 
+            });
+        }
+
+        const { config, fieldLengthMap } = cachedData;
+        const { numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = config;
+
+        // Calculate pagination
+        const pageSize = 100;
+        const totalPages = Math.ceil(totalRecords / pageSize);
+        
+        if (pageNumber > totalPages) {
+            return res.status(400).json({ 
+                error: `Page ${pageNumber} does not exist. Total pages: ${totalPages}` 
+            });
+        }
+
+        // Calculate records for this page
+        const startIndex = (pageNumber - 1) * pageSize;
+        const recordsToGenerate = Math.min(pageSize, totalRecords - startIndex);
+
+        // Set the cached field length map for consistent generation
+        if (fieldLengthMap) {
+            FIELD_LENGTH_MAP = fieldLengthMap;
+        }
+
+        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, uniformFieldLength);
+
+        // Generate URLs for navigation
+        const baseUrl = `${req.protocol}://${req.get('host')}/generate-paginated/${sessionId}`;
+        const hasNextPage = pageNumber < totalPages;
+        const hasPreviousPage = pageNumber > 1;
+        const nextUrl = hasNextPage ? `${baseUrl}/${pageNumber + 1}` : null;
+        const prevUrl = hasPreviousPage ? `${baseUrl}/${pageNumber - 1}` : null;
+
+        res.json({
+            success: true,
+            sessionId,
+            data,
+            pagination: {
+                currentPage: pageNumber,
+                totalPages,
+                totalRecords,
+                recordsPerPage: pageSize,
+                recordsInCurrentPage: recordsToGenerate,
+                hasNextPage,
+                hasPreviousPage,
+                nextUrl,
+                prevUrl
+            }
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

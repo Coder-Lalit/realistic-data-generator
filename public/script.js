@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let generatedData = null;
     let config = null;
+    let currentSession = null; // Store current pagination session data
 
     // Fetch configuration on page load
     fetchConfig();
@@ -34,17 +35,42 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Add event listener for pagination checkbox
+    const enablePaginationInput = document.getElementById('enablePagination');
+    const totalRecordsGroup = document.getElementById('totalRecordsGroup');
+    const numRecordsInput = document.getElementById('numRecords');
+
+    if (enablePaginationInput && totalRecordsGroup && numRecordsInput) {
+        enablePaginationInput.addEventListener('change', function() {
+            if (this.checked) {
+                totalRecordsGroup.style.display = 'block';
+                numRecordsInput.disabled = true;
+                numRecordsInput.style.opacity = '0.6';
+            } else {
+                totalRecordsGroup.style.display = 'none';
+                numRecordsInput.disabled = false;
+                numRecordsInput.style.opacity = '1';
+                currentSession = null; // Clear session when disabling pagination
+            }
+        });
+    }
+
     // Form submission handler
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
+        
+        const enablePagination = document.getElementById('enablePagination').checked;
+        const totalRecords = enablePagination ? parseInt(document.getElementById('totalRecords').value) || 1000 : null;
         
         const formData = {
             numFields: parseInt(document.getElementById('numFields').value) || 0,
             numObjects: parseInt(document.getElementById('numObjects').value) || 0,
             numNesting: parseInt(document.getElementById('numNesting').value) || 0,
-            numRecords: parseInt(document.getElementById('numRecords').value) || 0,
+            numRecords: enablePagination ? null : parseInt(document.getElementById('numRecords').value) || 0,
+            totalRecords: totalRecords,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
-            uniformFieldLength: document.getElementById('uniformFieldLength').checked
+            uniformFieldLength: document.getElementById('uniformFieldLength').checked,
+            enablePagination: enablePagination
         };
 
         // Validate input using dynamic configuration
@@ -70,9 +96,16 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        if (formData.numRecords < limits.numRecords.min || formData.numRecords > limits.numRecords.max) {
-            showError(`Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}`);
-            return;
+        if (!enablePagination) {
+            if (formData.numRecords < limits.numRecords.min || formData.numRecords > limits.numRecords.max) {
+                showError(`Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}`);
+                return;
+            }
+        } else {
+            if (formData.totalRecords < 101 || formData.totalRecords > 100000) {
+                showError('Total records for pagination must be between 101 and 100,000');
+                return;
+            }
         }
 
         if (formData.nestedFields < limits.nestedFields.min || formData.nestedFields > limits.nestedFields.max) {
@@ -82,7 +115,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Performance validation removed - no limits on total fields
 
-        await generateData(formData);
+        if (enablePagination) {
+            await generatePaginatedData(formData);
+        } else {
+            await generateData(formData);
+        }
     });
 
     // Copy button handler
@@ -143,7 +180,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (response.ok && result.success) {
                 generatedData = result.data;
-                displayResult(generatedData);
+                currentSession = null; // Clear any existing session
+                displayResult(generatedData, null);
             } else {
                 showError(result.error || 'An error occurred while generating data');
             }
@@ -152,8 +190,63 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Generate paginated data function
+    async function generatePaginatedData(formData) {
+        showLoading();
+        
+        try {
+            const response = await fetch('/generate-paginated', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                generatedData = result.data;
+                currentSession = {
+                    sessionId: result.sessionId,
+                    pagination: result.pagination
+                };
+                displayResult(generatedData, currentSession);
+            } else {
+                showError(result.error || 'An error occurred while generating paginated data');
+            }
+        } catch (error) {
+            showError('Network error: ' + error.message);
+        }
+    }
+
+    // Load specific page function
+    async function loadPage(pageNumber) {
+        if (!currentSession) {
+            showError('No active pagination session');
+            return;
+        }
+
+        showLoading();
+        
+        try {
+            const response = await fetch(`/generate-paginated/${currentSession.sessionId}/${pageNumber}`);
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                generatedData = result.data;
+                currentSession.pagination = result.pagination;
+                displayResult(generatedData, currentSession);
+            } else {
+                showError(result.error || 'An error occurred while loading the page');
+            }
+        } catch (error) {
+            showError('Network error: ' + error.message);
+        }
+    }
+
     // Display result function
-    function displayResult(data) {
+    function displayResult(data, session = null) {
         hideAllSections();
         
         // Format and display JSON with syntax highlighting
@@ -161,14 +254,73 @@ document.addEventListener('DOMContentLoaded', function() {
         jsonOutput.innerHTML = formattedJson;
         
         // Update stats
-        recordCount.textContent = `${data.length} records`;
+        if (session && session.pagination) {
+            const { currentPage, totalPages, totalRecords, recordsInCurrentPage } = session.pagination;
+            recordCount.textContent = `${recordsInCurrentPage} records (Page ${currentPage} of ${totalPages}, ${totalRecords} total)`;
+        } else {
+            recordCount.textContent = `${data.length} records`;
+        }
+        
         const jsonSize = new Blob([JSON.stringify(data)]).size;
         dataSize.textContent = formatBytes(jsonSize);
+        
+        // Handle pagination controls
+        const paginationControls = document.getElementById('paginationControls');
+        if (session && session.pagination) {
+            updatePaginationControls(session);
+            paginationControls.style.display = 'block';
+        } else {
+            paginationControls.style.display = 'none';
+        }
         
         // Show result section and action buttons
         resultSection.style.display = 'block';
         copyBtn.style.display = 'flex';
         downloadBtn.style.display = 'flex';
+    }
+
+    // Update pagination controls
+    function updatePaginationControls(session) {
+        const { pagination, sessionId } = session;
+        const { currentPage, totalPages, totalRecords, hasNextPage, hasPreviousPage, nextUrl, prevUrl } = pagination;
+
+        // Update pagination info
+        const paginationInfo = document.getElementById('paginationInfo');
+        const sessionInfo = document.getElementById('sessionInfo');
+        paginationInfo.textContent = `${totalRecords} total records`;
+        sessionInfo.textContent = `Session: ${sessionId.slice(-8)}`; // Show last 8 chars of session ID
+
+        // Update page indicator
+        const pageIndicator = document.getElementById('pageIndicator');
+        pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
+
+        // Update button states
+        const firstPageBtn = document.getElementById('firstPageBtn');
+        const prevPageBtn = document.getElementById('prevPageBtn');
+        const nextPageBtn = document.getElementById('nextPageBtn');
+        const lastPageBtn = document.getElementById('lastPageBtn');
+
+        firstPageBtn.disabled = !hasPreviousPage;
+        prevPageBtn.disabled = !hasPreviousPage;
+        nextPageBtn.disabled = !hasNextPage;
+        lastPageBtn.disabled = !hasNextPage;
+
+        // Remove existing event listeners and add new ones
+        const newFirstPageBtn = firstPageBtn.cloneNode(true);
+        const newPrevPageBtn = prevPageBtn.cloneNode(true);
+        const newNextPageBtn = nextPageBtn.cloneNode(true);
+        const newLastPageBtn = lastPageBtn.cloneNode(true);
+
+        firstPageBtn.parentNode.replaceChild(newFirstPageBtn, firstPageBtn);
+        prevPageBtn.parentNode.replaceChild(newPrevPageBtn, prevPageBtn);
+        nextPageBtn.parentNode.replaceChild(newNextPageBtn, nextPageBtn);
+        lastPageBtn.parentNode.replaceChild(newLastPageBtn, lastPageBtn);
+
+        // Add event listeners
+        newFirstPageBtn.addEventListener('click', () => loadPage(1));
+        newPrevPageBtn.addEventListener('click', () => loadPage(currentPage - 1));
+        newNextPageBtn.addEventListener('click', () => loadPage(currentPage + 1));
+        newLastPageBtn.addEventListener('click', () => loadPage(totalPages));
     }
 
     // Show loading state
@@ -194,6 +346,13 @@ document.addEventListener('DOMContentLoaded', function() {
         errorSection.style.display = 'none';
         copyBtn.style.display = 'none';
         downloadBtn.style.display = 'none';
+        
+        // Hide pagination controls
+        const paginationControls = document.getElementById('paginationControls');
+        if (paginationControls) {
+            paginationControls.style.display = 'none';
+        }
+        
         resetGenerateButton();
     }
 
