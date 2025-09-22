@@ -91,80 +91,94 @@ let FIELD_LENGTH_MAP = {};
 function generateFieldLengthMap() {
     const lengthMap = {};
     
+    // Create different length categories for variety
+    const lengthCategories = {
+        veryShort: [3, 4, 5],
+        short: [6, 7, 8, 9, 10],
+        medium: [11, 12, 13, 14, 15, 16, 17, 18],
+        long: [19, 20, 21, 22, 23, 24, 25],
+        veryLong: [26, 27, 28, 29, 30, 35, 40]
+    };
+    
     for (const fieldType of FIELD_TYPES) {
-        // Generate random lengths based on typical field type characteristics
-        let minLength, maxLength;
+        let selectedCategory;
         
+        // Assign categories based on field type characteristics, but with some randomness
         switch (fieldType) {
             case 'uuid':
             case 'nanoid':
-                // These will be skipped anyway, but set reasonable defaults
-                minLength = 36;
-                maxLength = 36;
-                break;
-            case 'firstName':
-            case 'lastName':
-            case 'middleName':
-                minLength = 6;
-                maxLength = 12;
-                break;
-            case 'fullName':
-                minLength = 10;
-                maxLength = 18;
-                break;
-            case 'email':
-            case 'website':
-                minLength = 18;
-                maxLength = 30;
-                break;
-            case 'address':
-            case 'description':
-            case 'paragraph':
-                minLength = 25;
-                maxLength = 50;
-                break;
-            case 'phone':
-            case 'phoneNumber':
-                minLength = 12;
-                maxLength = 17;
-                break;
-            case 'company':
-            case 'jobTitle':
-                minLength = 8;
-                maxLength = 20;
-                break;
-            case 'city':
-            case 'state':
-            case 'country':
-                minLength = 5;
-                maxLength = 15;
-                break;
-            case 'zipCode':
-            case 'currency':
-                minLength = 3;
-                maxLength = 8;
-                break;
+                // These should keep their natural length - skip uniform length enforcement
+                lengthMap[fieldType] = null; // Special marker to skip length enforcement
+                continue;
+                
             case 'age':
             case 'rating':
             case 'number':
-                minLength = 1;
-                maxLength = 4;
+            case 'port':
+                selectedCategory = Math.random() < 0.8 ? 'veryShort' : 'short';
                 break;
+                
             case 'boolean':
-                minLength = 4;
-                maxLength = 5;
+            case 'currency':
+            case 'zipCode':
+            case 'fileExtension':
+                selectedCategory = Math.random() < 0.7 ? 'veryShort' : 'short';
                 break;
+                
+            case 'firstName':
+            case 'lastName':
+            case 'middleName':
+            case 'city':
+            case 'state':
+            case 'country':
+            case 'color':
+            case 'weekday':
+            case 'month':
+                selectedCategory = Math.random() < 0.6 ? 'short' : 'medium';
+                break;
+                
+            case 'fullName':
+            case 'email':
+            case 'website':
+            case 'username':
+            case 'company':
+            case 'jobTitle':
+            case 'phone':
+            case 'phoneNumber':
+                selectedCategory = Math.random() < 0.5 ? 'medium' : 'long';
+                break;
+                
+            case 'address':
+            case 'description':
+            case 'sentence':
+            case 'title':
+            case 'productName':
+            case 'productDescription':
+            case 'catchPhrase':
+            case 'buzzword':
+                selectedCategory = Math.random() < 0.4 ? 'long' : 'veryLong';
+                break;
+                
+            case 'paragraph':
+            case 'bio':
+            case 'userAgent':
+            case 'directoryPath':
+                selectedCategory = Math.random() < 0.8 ? 'veryLong' : 'long';
+                break;
+                
             default:
-                minLength = 8;
-                maxLength = 20;
+                // Random assignment for other fields
+                const categories = Object.keys(lengthCategories);
+                selectedCategory = categories[Math.floor(Math.random() * categories.length)];
                 break;
         }
         
-        // Generate random length within the range
-        lengthMap[fieldType] = Math.floor(Math.random() * (maxLength - minLength + 1)) + minLength;
+        // Pick a random length from the selected category
+        const availableLengths = lengthCategories[selectedCategory];
+        lengthMap[fieldType] = availableLengths[Math.floor(Math.random() * availableLengths.length)];
     }
     
-    console.log('🎲 Generated field length map:', lengthMap);
+    console.log('🎲 Generated random field length schema:', lengthMap);
     return lengthMap;
 }
 
@@ -396,13 +410,8 @@ function removeEmojis(text) {
 
 // Function to enforce uniform field length based on field type
 function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
-    if (!useUniformLength || !FIELD_LENGTH_MAP[fieldType]) {
-        return fieldValue; // No length enforcement
-    }
-    
-    // Skip UUID fields - they should keep their natural length
-    if (fieldType === 'uuid' || fieldType === 'nanoid') {
-        return fieldValue;
+    if (!useUniformLength || !FIELD_LENGTH_MAP.hasOwnProperty(fieldType) || FIELD_LENGTH_MAP[fieldType] === null) {
+        return fieldValue; // No length enforcement or special null marker
     }
     
     const targetLength = FIELD_LENGTH_MAP[fieldType];
@@ -411,13 +420,25 @@ function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
     let stringValue = String(fieldValue);
     
     if (stringValue.length > targetLength) {
-        // Truncate and add ellipsis if too long
-        return stringValue.substring(0, targetLength - 3) + '...';
+        // Truncate and add ellipsis if too long (but ensure minimum length of 3 for ellipsis)
+        if (targetLength <= 3) {
+            return stringValue.substring(0, targetLength);
+        } else {
+            return stringValue.substring(0, targetLength - 3) + '...';
+        }
     } else if (stringValue.length < targetLength) {
-        // For names and text fields, don't pad with spaces - just truncate if needed
-        // Only pad for certain field types that benefit from fixed width
-        if (['number', 'age', 'rating', 'port', 'zipCode'].includes(fieldType)) {
+        // For specific field types, pad to exact length
+        if (['number', 'age', 'rating', 'port', 'zipCode', 'boolean'].includes(fieldType)) {
             return stringValue.padEnd(targetLength, ' ');
+        }
+        // For text fields, generate additional content to reach target length
+        if (['firstName', 'lastName', 'middleName', 'city', 'state', 'country'].includes(fieldType)) {
+            // For names, add random characters
+            const additionalChars = 'abcdefghijklmnopqrstuvwxyz';
+            while (stringValue.length < targetLength) {
+                stringValue += additionalChars[Math.floor(Math.random() * additionalChars.length)];
+            }
+            return stringValue;
         }
         // For other fields, keep natural length if shorter than target
         return stringValue;
@@ -441,12 +462,13 @@ function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniform
     }
     
     // Apply uniform length if specified
-    if (useUniformLength && FIELD_LENGTH_MAP[fieldType]) {
+    if (useUniformLength && FIELD_LENGTH_MAP.hasOwnProperty(fieldType) && FIELD_LENGTH_MAP[fieldType] !== null) {
         const originalLength = String(processedValue).length;
         const targetLength = FIELD_LENGTH_MAP[fieldType];
         processedValue = enforceUniformLength(processedValue, fieldType, useUniformLength);
-        if (originalLength !== targetLength) {
-            console.log(`📏 Adjusted field '${fieldName}' (${fieldType}) length: ${originalLength} → ${targetLength}`);
+        const finalLength = String(processedValue).length;
+        if (originalLength !== finalLength) {
+            console.log(`📏 Adjusted field '${fieldName}' (${fieldType}) length: ${originalLength} → ${finalLength} (target: ${targetLength})`);
         }
     }
     

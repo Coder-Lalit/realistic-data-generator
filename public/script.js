@@ -43,7 +43,8 @@ document.addEventListener('DOMContentLoaded', function() {
             numObjects: parseInt(document.getElementById('numObjects').value) || 0,
             numNesting: parseInt(document.getElementById('numNesting').value) || 0,
             numRecords: parseInt(document.getElementById('numRecords').value) || 0,
-            nestedFields: parseInt(document.getElementById('nestedFields').value) || 0
+            nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
+            uniformFieldLength: document.getElementById('uniformFieldLength').checked
         };
 
         // Validate input using dynamic configuration
