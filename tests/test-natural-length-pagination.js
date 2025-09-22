@@ -112,9 +112,10 @@ async function testNaturalLengthPagination() {
                 } else {
                     const pagePayload = {
                         ...sessionData,
+                        sessionId: sessionId,
                         pageNumber: pageNum
                     };
-                    const pageResponse = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
+                    const pageResponse = await makeRequest('http://localhost:3000/generate-paginated', 'POST', pagePayload);
                     if (!pageResponse.success) {
                         throw new Error(`Page ${pageNum} request failed: ${pageResponse.error}`);
                     }

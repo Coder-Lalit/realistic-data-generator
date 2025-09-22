@@ -15,6 +15,7 @@
 const { testFixedLengthPagination } = require('./test-fixed-length-pagination');
 const { testNaturalLengthPagination } = require('./test-natural-length-pagination');
 const { comprehensiveComparisonTest } = require('./test-comprehensive-comparison');
+const { testConfigurablePageSize } = require('./test-configurable-page-size');
 
 async function runAllTests() {
     console.log('🚀 RUNNING ALL PAGINATION TESTS');
@@ -26,6 +27,7 @@ async function runAllTests() {
         fixedLength: false,
         naturalLength: false, 
         comparison: false,
+        configurablePageSize: false,
         startTime: Date.now()
     };
 
@@ -57,6 +59,16 @@ async function runAllTests() {
         results.comparison = comparisonResult.success;
         console.log('✅ Comparison test PASSED\n');
 
+        // Small delay between tests
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Test 4: Configurable Page Size
+        console.log('📊 TEST 4: CONFIGURABLE PAGE SIZE');
+        console.log('=================================');
+        const pageSizeResult = await testConfigurablePageSize();
+        results.configurablePageSize = pageSizeResult.success;
+        console.log('✅ Configurable page size test PASSED\n');
+
         // Final Results
         const totalTime = Date.now() - results.startTime;
         console.log('🏆 ALL TESTS COMPLETED SUCCESSFULLY!');
@@ -64,6 +76,7 @@ async function runAllTests() {
         console.log(`✅ Fixed Length Pagination: PASSED`);
         console.log(`✅ Natural Length Pagination: PASSED`);
         console.log(`✅ Comprehensive Comparison: PASSED`);
+        console.log(`✅ Configurable Page Size: PASSED`);
         console.log(`⏱️  Total Test Time: ${(totalTime / 1000).toFixed(1)}s`);
         console.log();
         console.log('🎉 The pagination system is fully validated and ready for production!');
@@ -75,6 +88,7 @@ async function runAllTests() {
         console.log(`🔒 Fixed Length: ${results.fixedLength ? '✅ PASSED' : '❌ FAILED'}`);
         console.log(`🌿 Natural Length: ${results.naturalLength ? '✅ PASSED' : '❌ FAILED'}`);
         console.log(`🔬 Comparison: ${results.comparison ? '✅ PASSED' : '❌ FAILED'}`);
+        console.log(`📊 Configurable Page Size: ${results.configurablePageSize ? '✅ PASSED' : '❌ FAILED'}`);
         process.exit(1);
     }
 }

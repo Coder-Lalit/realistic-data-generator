@@ -43,17 +43,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (enablePaginationInput && numRecordsInput && numRecordsLabel && recordsHelp) {
         enablePaginationInput.addEventListener('change', function() {
+            const recordsPerPageGroup = document.getElementById('recordsPerPageGroup');
+            
             if (this.checked) {
                 // Update range for pagination mode, keep same help text
                 numRecordsInput.min = 10;
                 numRecordsInput.max = 1000000;
                 numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, 1000000), 10);
                 recordsHelp.textContent = 'Range: 1-10000 | Default: 10';
+                recordsPerPageGroup.style.display = 'block';
             } else {
                 // Restore original range and help text for regular mode
                 numRecordsInput.min = 1;
                 numRecordsInput.max = 10000;
                 numRecordsInput.value = Math.min(parseInt(numRecordsInput.value) || 10, 10000);
+                recordsPerPageGroup.style.display = 'none';
                 updateFormLimits(); // This will restore the original help text
                 currentSession = null; // Clear session when disabling pagination
             }
@@ -75,6 +79,7 @@ document.addEventListener('DOMContentLoaded', function() {
             totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
+            recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
             enablePagination: enablePagination
         };
 
@@ -315,13 +320,14 @@ document.addEventListener('DOMContentLoaded', function() {
         showLoading();
         
         try {
-            // Create POST payload with original form data + page number
+            // Create POST payload with original form data + session ID + page number
             const pagePayload = {
                 ...currentSession.originalPayload,
+                sessionId: currentSession.sessionId,
                 pageNumber: pageNumber
             };
 
-            const response = await fetch(`/generate-paginated/${currentSession.sessionId}`, {
+            const response = await fetch('/generate-paginated', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

@@ -71,6 +71,11 @@ const CONFIG = {
         },
         uniformFieldLength: {
             default: false  // boolean flag to enable uniform field lengths across records
+        },
+        recordsPerPage: {
+            min: 10,
+            max: 1000,
+            default: 100
         }
     }
 };
@@ -438,15 +443,24 @@ app.post('/data', (req, res) => {
     }
 });
 
-// Paginated data generation endpoint - creates session and returns first page
+// Unified paginated data generation endpoint - handles both new sessions and page navigation
 app.post('/generate-paginated', (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = req.body;
-        logger.info(`Pagination request: ${totalRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
+        const { sessionId, pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength, recordsPerPage } = req.body;
+        // Determine if this is a new session or existing session navigation
+        const isNewSession = !sessionId || sessionId === null || sessionId === "";
+        const currentPageNumber = pageNumber || 1;
+        
+        if (isNewSession) {
+            logger.info(`New pagination session: ${totalRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
+        } else {
+            logger.info(`Pagination navigation: session ${sessionId.slice(-8)}, page ${currentPageNumber}`);
+        }
 
         // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
         const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : CONFIG.limits.recordsPerPage.default;
 
         // Validate input
         if (!numFields || numObjects === undefined || numNesting === undefined || !totalRecords) {
@@ -488,154 +502,140 @@ app.post('/generate-paginated', (req, res) => {
             });
         }
 
-        // Generate session ID
-        const sessionId = generateSessionId();
-        
-        // Store configuration and field length schema
-        const sessionConfig = {
-            numFields,
-            numObjects,
-            numNesting,
-            totalRecords,
-            nestedFields: finalNestedFields,
-            uniformFieldLength: finalUniformLength
-        };
-
-        // Generate field length map if uniform length is requested
-        let fieldLengthMap = null;
-        if (finalUniformLength) {
-            fieldLengthMap = generateFieldLengthMap();
+        if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
+            return res.status(400).json({ 
+                error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}` 
+            });
         }
 
-        // Store in cache
-        storeSchemaInCache(sessionId, sessionConfig, fieldLengthMap);
+        // Handle session ID and page validation
+        let finalSessionId;
+        let cachedData = null;
+        
+        if (isNewSession) {
+            // Generate new session ID for new sessions
+            finalSessionId = generateSessionId();
+            
+            // Validate page number for new sessions (should be 1 or undefined)
+            if (currentPageNumber !== 1) {
+                return res.status(400).json({ 
+                    error: 'New sessions must start from page 1' 
+                });
+            }
+        } else {
+            // Use provided session ID and validate it exists
+            finalSessionId = sessionId;
+            
+            // Validate page number for existing sessions
+            if (currentPageNumber < 1) {
+                return res.status(400).json({ 
+                    error: 'Invalid page number. Must be a positive integer.' 
+                });
+            }
+            
+            // Retrieve and validate existing session
+            cachedData = getSchemaFromCache(finalSessionId);
+            if (!cachedData) {
+                return res.status(404).json({ 
+                    error: 'Session not found or expired. Please start a new pagination session.' 
+                });
+            }
+        }
+        
+        // Handle configuration for new vs existing sessions
+        let sessionConfig;
+        let effectivePageSize;
+        let effectiveTotalRecords;
+        let fieldLengthMap = null;
+        
+        if (isNewSession) {
+            // Store configuration for new sessions
+            sessionConfig = {
+                numFields,
+                numObjects,
+                numNesting,
+                totalRecords,
+                nestedFields: finalNestedFields,
+                uniformFieldLength: finalUniformLength,
+                recordsPerPage: finalRecordsPerPage
+            };
+            
+            effectivePageSize = finalRecordsPerPage;
+            effectiveTotalRecords = totalRecords;
+            
+            // Generate field length map if uniform length is requested
+            if (finalUniformLength) {
+                fieldLengthMap = generateFieldLengthMap();
+            }
+            
+            // Store in cache for new sessions
+            storeSchemaInCache(finalSessionId, sessionConfig, fieldLengthMap);
+        } else {
+            // Use cached configuration for existing sessions
+            sessionConfig = {
+                numFields: cachedData.config.numFields,
+                numObjects: cachedData.config.numObjects,
+                numNesting: cachedData.config.numNesting,
+                totalRecords: cachedData.config.totalRecords,
+                nestedFields: cachedData.config.nestedFields,
+                uniformFieldLength: cachedData.config.uniformFieldLength,
+                recordsPerPage: cachedData.config.recordsPerPage
+            };
+            
+            effectivePageSize = cachedData.config.recordsPerPage;
+            effectiveTotalRecords = cachedData.config.totalRecords;
+            fieldLengthMap = cachedData.fieldLengthMap;
+        }
 
-        // Generate first page (100 records max)
-        const pageSize = 100;
-        const recordsToGenerate = Math.min(pageSize, totalRecords);
+        // Validate page number against total records
+        const totalPages = Math.ceil(effectiveTotalRecords / effectivePageSize);
+        if (currentPageNumber > totalPages) {
+            return res.status(400).json({ 
+                error: `Page ${currentPageNumber} does not exist. Total pages: ${totalPages}` 
+            });
+        }
+
+        // Generate data for requested page
+        const startIndex = (currentPageNumber - 1) * effectivePageSize;
+        const endIndex = Math.min(startIndex + effectivePageSize, effectiveTotalRecords);
+        const recordsToGenerate = endIndex - startIndex;
         
         // Temporarily set the global field length map for this generation
         if (fieldLengthMap) {
             FIELD_LENGTH_MAP = fieldLengthMap;
         }
 
-        // Generate deterministic data for first page
-        const seed = generatePageSeed(sessionId, 1);
-        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, finalNestedFields, finalUniformLength, seed);
+        // Generate deterministic data for requested page
+        const seed = generatePageSeed(finalSessionId, currentPageNumber);
+        const data = generateRealisticData(
+            sessionConfig.numFields, 
+            sessionConfig.numObjects, 
+            sessionConfig.numNesting, 
+            recordsToGenerate, 
+            sessionConfig.nestedFields, 
+            sessionConfig.uniformFieldLength, 
+            seed
+        );
         
         // Calculate pagination info
-        const totalPages = Math.ceil(totalRecords / pageSize);
-        const hasNextPage = totalRecords > pageSize;
+        const hasNextPage = currentPageNumber < totalPages;
+        const hasPreviousPage = currentPageNumber > 1;
 
-        // Generate URLs for navigation (POST endpoints without page numbers)
-        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}` : null;
-        const prevUrl = null; // First page has no previous
-        const nextPageNumber = hasNextPage ? 2 : null;
-        const prevPageNumber = null;
-
-        res.json({
-            success: true,
-            sessionId,
-            data,
-            pagination: {
-                currentPage: 1,
-                totalPages,
-                totalRecords,
-                recordsPerPage: pageSize,
-                recordsInCurrentPage: recordsToGenerate,
-                hasNextPage,
-                hasPreviousPage: false,
-                nextUrl,
-                prevUrl,
-                nextPageNumber,
-                prevPageNumber
-            }
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Get specific page using session ID and POST payload
-app.post('/generate-paginated/:sessionId', (req, res) => {
-    try {
-        const { sessionId } = req.params;
-        const { pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = req.body;
-        
-        // Validate required POST parameters
-        if (!pageNumber || pageNumber < 1) {
-            return res.status(400).json({ 
-                error: 'Invalid page number. Must be a positive integer.' 
-            });
-        }
-        
-        if (numFields === undefined || numObjects === undefined || numNesting === undefined || 
-            totalRecords === undefined || nestedFields === undefined || uniformFieldLength === undefined) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters: numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength' 
-            });
-        }
-
-        // Retrieve schema from cache
-        const cachedData = getSchemaFromCache(sessionId);
-        if (!cachedData) {
-            return res.status(404).json({ 
-                error: 'Session not found or expired. Please start a new pagination session.' 
-            });
-        }
-
-        const { config, fieldLengthMap, hasFixedFieldLength } = cachedData;
-        // Use the POST body parameters, but validate against cached config for consistency
-        const cachedConfig = config;
-
-        // Calculate pagination
-        const pageSize = 100;
-        const totalPages = Math.ceil(totalRecords / pageSize);
-        
-        if (pageNumber > totalPages) {
-            return res.status(400).json({ 
-                error: `Page ${pageNumber} does not exist. Total pages: ${totalPages}` 
-            });
-        }
-
-        // Calculate records for this page
-        const startIndex = (pageNumber - 1) * pageSize;
-        const recordsToGenerate = Math.min(pageSize, totalRecords - startIndex);
-
-        // Determine schema behavior based on Fixed Field Length flag
-        if (hasFixedFieldLength) {
-            // Honor cached field length map for consistent generation
-            if (fieldLengthMap) {
-                FIELD_LENGTH_MAP = fieldLengthMap;
-            }
-            logger.debug(`Using cached field length map for session: ${sessionId.slice(-8)}`);
-        } else {
-            // Completely bypass schema - no field length map or processing
-            FIELD_LENGTH_MAP = null;
-            logger.debug(`Generating natural data without any schema for session: ${sessionId.slice(-8)}`);
-        }
-
-        // Generate deterministic data for pagination consistency
-        const seed = generatePageSeed(sessionId, pageNumber);
-        const data = generateRealisticData(numFields, numObjects, numNesting, recordsToGenerate, nestedFields, hasFixedFieldLength, seed);
-
-        // Generate URLs for navigation (POST endpoints without page numbers)
-        const hasNextPage = pageNumber < totalPages;
-        const hasPreviousPage = pageNumber > 1;
-        const nextUrl = hasNextPage ? `/generate-paginated/${sessionId}` : null;
-        const prevUrl = hasPreviousPage ? `/generate-paginated/${sessionId}` : null;
-        const nextPageNumber = hasNextPage ? pageNumber + 1 : null;
-        const prevPageNumber = hasPreviousPage ? pageNumber - 1 : null;
+        // Generate URLs for navigation (POST endpoints without session IDs in URL)
+        const nextUrl = hasNextPage ? `/generate-paginated` : null;
+        const prevUrl = hasPreviousPage ? `/generate-paginated` : null;
+        const nextPageNumber = hasNextPage ? currentPageNumber + 1 : null;
+        const prevPageNumber = hasPreviousPage ? currentPageNumber - 1 : null;
 
         res.json({
             success: true,
-            sessionId,
+            sessionId: finalSessionId,
             data,
             pagination: {
-                currentPage: pageNumber,
+                currentPage: currentPageNumber,
                 totalPages,
-                totalRecords,
-                recordsPerPage: pageSize,
+                totalRecords: effectiveTotalRecords,
+                recordsPerPage: effectivePageSize,
                 recordsInCurrentPage: recordsToGenerate,
                 hasNextPage,
                 hasPreviousPage,

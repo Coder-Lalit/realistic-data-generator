@@ -68,7 +68,8 @@ async function testFixedLengthPagination() {
             numNesting: 0,
             totalRecords: 10000,
             nestedFields: 0,
-            uniformFieldLength: true  // 🔒 CRITICAL: Fixed length enabled
+            uniformFieldLength: true,  // 🔒 CRITICAL: Fixed length enabled
+            recordsPerPage: 100  // Configurable page size
         };
 
         const sessionResponse = await makeRequest('http://localhost:3000/generate-paginated', 'POST', sessionData);
@@ -117,12 +118,13 @@ async function testFixedLengthPagination() {
                 if (pageNum === 1) {
                     pageData = firstPageData; // Use already fetched data
                 } else {
-                    // Create POST payload for page request
+                    // Create POST payload for page request with sessionId in payload
                     const pagePayload = {
                         ...sessionData,
+                        sessionId: sessionId,
                         pageNumber: pageNum
                     };
-                    const pageResponse = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
+                    const pageResponse = await makeRequest('http://localhost:3000/generate-paginated', 'POST', pagePayload);
                     if (!pageResponse.success) {
                         throw new Error(`Page ${pageNum} request failed: ${pageResponse.error}`);
                     }

@@ -67,7 +67,30 @@ node tests/test-comprehensive-comparison.js
 
 ---
 
-### 4. `run-all-tests.js`
+### 4. `test-configurable-page-size.js`
+**Purpose**: Validates configurable records per page feature
+
+**What it tests**:
+- ✅ Different page sizes (10, 25, 50, 100, 500, 1000)
+- ✅ Validation of min/max limits (10-1000)
+- ✅ Correct pagination calculations
+- ✅ Page navigation with different page sizes
+- ✅ Edge cases and boundary conditions
+
+**Usage**:
+```bash
+node tests/test-configurable-page-size.js
+```
+
+**Expected Results**:
+- All page sizes work correctly
+- Validation properly enforces limits
+- Pagination calculations are accurate
+- Navigation works with different page sizes
+
+---
+
+### 5. `run-all-tests.js`
 **Purpose**: Executes all tests in sequence
 
 **Usage**:
@@ -79,7 +102,8 @@ node tests/run-all-tests.js
 1. Runs Fixed Length test
 2. Runs Natural Length test
 3. Runs Comprehensive Comparison
-4. Reports overall results
+4. Runs Configurable Page Size test
+5. Reports overall results
 
 ---
 
@@ -239,6 +263,7 @@ const LOG_LEVEL = 'DEBUG'; // Shows detailed field processing
 - **Performance**: ✅ 17-20ms response times
 - **URLs**: ✅ Relative paths (no domain prefix)
 - **Method**: ✅ POST requests with payload (September 22, 2025)
+- **Page Size**: ✅ Configurable records per page (10-1000)
 
 ### Key Fixes Applied
 1. **Fixed fullName field length enforcement** (missing from padding logic)

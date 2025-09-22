@@ -47,13 +47,16 @@
                         <small id="recordsHelp">Loading limits...</small>
                     </div>
 
+                </div>
+
+                <div class="form-grid">
                     <div class="form-group checkbox-group">
                         <label class="checkbox-label">
                             <input type="checkbox" id="uniformFieldLength" name="uniformFieldLength">
                             <span class="checkmark"></span>
                             Fixed Field Length
                         </label>
-                        <small>Generate data with consistent field lengths across all records</small>
+                        <small>Field lengths across all records</small>
                     </div>
 
                     <div class="form-group checkbox-group">
@@ -62,7 +65,13 @@
                             <span class="checkmark"></span>
                             Enable Pagination
                         </label>
-                        <small>Generate large datasets in chunks of 100 records per page</small>
+                        <small>Configurable page sizes</small>
+                    </div>
+
+                    <div class="form-group" id="recordsPerPageGroup" style="display: none;">
+                        <label for="recordsPerPage">Records per Page</label>
+                        <input type="number" id="recordsPerPage" min="10" max="1000" value="100" required>
+                        <small id="recordsPerPageHelp">Range: 10-1000 | Default: 100</small>
                     </div>
                 </div>
 

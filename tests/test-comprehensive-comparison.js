@@ -129,9 +129,9 @@ async function comprehensiveComparisonTest() {
         // Test Fixed Length determinism
         console.log(`🔒 Fixed Length Session (Page ${testPage}):`);
         const fixedPayload = { ...baseConfig, uniformFieldLength: true, pageNumber: testPage };
-        const fixed1 = await makeRequest(`http://localhost:3000/generate-paginated/${fixedLengthResponse.sessionId}`, 'POST', fixedPayload);
+        const fixed1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...fixedPayload, sessionId: fixedLengthResponse.sessionId });
         await new Promise(resolve => setTimeout(resolve, 200));
-        const fixed2 = await makeRequest(`http://localhost:3000/generate-paginated/${fixedLengthResponse.sessionId}`, 'POST', fixedPayload);
+        const fixed2 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...fixedPayload, sessionId: fixedLengthResponse.sessionId });
         
         const fixedDeterministic = JSON.stringify(fixed1.data[0]) === JSON.stringify(fixed2.data[0]);
         console.log(`   ${fixedDeterministic ? '✅' : '❌'} ${fixedDeterministic ? 'Identical data on multiple calls' : 'Different data detected'}`);
@@ -139,9 +139,9 @@ async function comprehensiveComparisonTest() {
         // Test Natural Length determinism
         console.log(`🌿 Natural Length Session (Page ${testPage}):`);
         const naturalPayload = { ...baseConfig, uniformFieldLength: false, pageNumber: testPage };
-        const natural1 = await makeRequest(`http://localhost:3000/generate-paginated/${naturalLengthResponse.sessionId}`, 'POST', naturalPayload);
+        const natural1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...naturalPayload, sessionId: naturalLengthResponse.sessionId });
         await new Promise(resolve => setTimeout(resolve, 200));
-        const natural2 = await makeRequest(`http://localhost:3000/generate-paginated/${naturalLengthResponse.sessionId}`, 'POST', naturalPayload);
+        const natural2 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...naturalPayload, sessionId: naturalLengthResponse.sessionId });
         
         const naturalDeterministic = JSON.stringify(natural1.data[0]) === JSON.stringify(natural2.data[0]);
         console.log(`   ${naturalDeterministic ? '✅' : '❌'} ${naturalDeterministic ? 'Identical data on multiple calls' : 'Different data detected'}`);
@@ -153,9 +153,9 @@ async function comprehensiveComparisonTest() {
 
         // Test Fixed Length cross-page consistency
         console.log('🔒 Fixed Length - Field length consistency across pages:');
-        const fixedPage1 = await makeRequest(`http://localhost:3000/generate-paginated/${fixedLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 1 });
-        const fixedPage50 = await makeRequest(`http://localhost:3000/generate-paginated/${fixedLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 50 });
-        const fixedPage100 = await makeRequest(`http://localhost:3000/generate-paginated/${fixedLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 100 });
+        const fixedPage1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 1, sessionId: fixedLengthResponse.sessionId });
+        const fixedPage50 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 50, sessionId: fixedLengthResponse.sessionId });
+        const fixedPage100 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 100, sessionId: fixedLengthResponse.sessionId });
 
         const fixedRecord1 = fixedPage1.data[0];
         const fixedRecord50 = fixedPage50.data[0];
@@ -175,9 +175,9 @@ async function comprehensiveComparisonTest() {
 
         console.log();
         console.log('🌿 Natural Length - Field length variation across pages:');
-        const naturalPage1 = await makeRequest(`http://localhost:3000/generate-paginated/${naturalLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 1 });
-        const naturalPage50 = await makeRequest(`http://localhost:3000/generate-paginated/${naturalLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 50 });
-        const naturalPage100 = await makeRequest(`http://localhost:3000/generate-paginated/${naturalLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 100 });
+        const naturalPage1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 1, sessionId: naturalLengthResponse.sessionId });
+        const naturalPage50 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 50, sessionId: naturalLengthResponse.sessionId });
+        const naturalPage100 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 100, sessionId: naturalLengthResponse.sessionId });
 
         const naturalRecord1 = naturalPage1.data[0];
         const naturalRecord50 = naturalPage50.data[0];
@@ -201,11 +201,11 @@ async function comprehensiveComparisonTest() {
         console.log('=========================');
 
         const startFixed = Date.now();
-        await makeRequest(`http://localhost:3000/generate-paginated/${fixedLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 75 });
+        await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: true, pageNumber: 75, sessionId: fixedLengthResponse.sessionId });
         const fixedTime = Date.now() - startFixed;
 
         const startNatural = Date.now();
-        await makeRequest(`http://localhost:3000/generate-paginated/${naturalLengthResponse.sessionId}`, 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 75 });
+        await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 75, sessionId: naturalLengthResponse.sessionId });
         const naturalTime = Date.now() - startNatural;
 
         console.log(`🔒 Fixed Length Response Time: ${fixedTime}ms`);
