@@ -64,12 +64,6 @@
                         </label>
                         <small>Generate large datasets in chunks of 100 records per page</small>
                     </div>
-
-                    <div class="form-group" id="totalRecordsGroup" style="display: none;">
-                        <label for="totalRecords">Total Records (for pagination)</label>
-                        <input type="number" id="totalRecords" min="101" max="100000" value="1000" required>
-                        <small>Total number of records to generate across all pages (max: 100,000)</small>
-                    </div>
                 </div>
 
                 <div class="button-group">
@@ -91,7 +85,14 @@
 
         <div id="loadingSection" class="loading-section" style="display: none;">
             <div class="loader"></div>
-            <p>Generating your realistic data...</p>
+            <p id="loadingText">Generating your realistic data...</p>
+            <div id="progressContainer" class="progress-container" style="display: none;">
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+                <div id="progressText" class="progress-text">0%</div>
+                <div id="progressEstimate" class="progress-estimate"></div>
+            </div>
         </div>
 
         <div id="resultSection" class="result-section" style="display: none;">
@@ -100,26 +101,23 @@
                 <div class="result-stats">
                     <span id="recordCount"></span>
                     <span id="dataSize"></span>
+                    <span id="sessionInfo" style="display: none;"></span>
                 </div>
             </div>
             
             <div id="paginationControls" class="pagination-controls" style="display: none;">
-                <div class="pagination-info">
-                    <span id="paginationInfo"></span>
-                    <span id="sessionInfo"></span>
-                </div>
                 <div class="pagination-buttons">
-                    <button type="button" id="firstPageBtn" class="pagination-btn">
+                    <button type="button" id="firstPageBtn" class="pagination-btn-small">
                         <span class="btn-icon">⏮️</span>First
                     </button>
-                    <button type="button" id="prevPageBtn" class="pagination-btn">
+                    <button type="button" id="prevPageBtn" class="pagination-btn-small">
                         <span class="btn-icon">⬅️</span>Previous
                     </button>
-                    <span id="pageIndicator" class="page-indicator">Page 1 of 1</span>
-                    <button type="button" id="nextPageBtn" class="pagination-btn">
+                    <span id="pageIndicator" class="page-indicator-small">Page 1 of 1</span>
+                    <button type="button" id="nextPageBtn" class="pagination-btn-small">
                         <span class="btn-icon">➡️</span>Next
                     </button>
-                    <button type="button" id="lastPageBtn" class="pagination-btn">
+                    <button type="button" id="lastPageBtn" class="pagination-btn-small">
                         <span class="btn-icon">⏭️</span>Last
                     </button>
                 </div>

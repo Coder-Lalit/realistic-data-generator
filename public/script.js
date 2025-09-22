@@ -37,19 +37,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add event listener for pagination checkbox
     const enablePaginationInput = document.getElementById('enablePagination');
-    const totalRecordsGroup = document.getElementById('totalRecordsGroup');
     const numRecordsInput = document.getElementById('numRecords');
+    const numRecordsLabel = document.querySelector('label[for="numRecords"]');
+    const recordsHelp = document.getElementById('recordsHelp');
 
-    if (enablePaginationInput && totalRecordsGroup && numRecordsInput) {
+    if (enablePaginationInput && numRecordsInput && numRecordsLabel && recordsHelp) {
         enablePaginationInput.addEventListener('change', function() {
             if (this.checked) {
-                totalRecordsGroup.style.display = 'block';
-                numRecordsInput.disabled = true;
-                numRecordsInput.style.opacity = '0.6';
+                // Update range for pagination mode, keep same help text
+                numRecordsInput.min = 10;
+                numRecordsInput.max = 1000000;
+                numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, 1000000), 10);
+                recordsHelp.textContent = 'Range: 1-10000 | Default: 10';
             } else {
-                totalRecordsGroup.style.display = 'none';
-                numRecordsInput.disabled = false;
-                numRecordsInput.style.opacity = '1';
+                // Restore original range and help text for regular mode
+                numRecordsInput.min = 1;
+                numRecordsInput.max = 10000;
+                numRecordsInput.value = Math.min(parseInt(numRecordsInput.value) || 10, 10000);
+                updateFormLimits(); // This will restore the original help text
                 currentSession = null; // Clear session when disabling pagination
             }
         });
@@ -60,14 +65,14 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         
         const enablePagination = document.getElementById('enablePagination').checked;
-        const totalRecords = enablePagination ? parseInt(document.getElementById('totalRecords').value) || 1000 : null;
+        const numRecordsValue = parseInt(document.getElementById('numRecords').value) || 0;
         
         const formData = {
             numFields: parseInt(document.getElementById('numFields').value) || 0,
             numObjects: parseInt(document.getElementById('numObjects').value) || 0,
             numNesting: parseInt(document.getElementById('numNesting').value) || 0,
-            numRecords: enablePagination ? null : parseInt(document.getElementById('numRecords').value) || 0,
-            totalRecords: totalRecords,
+            numRecords: enablePagination ? null : numRecordsValue,
+            totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
             enablePagination: enablePagination
@@ -97,13 +102,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (!enablePagination) {
-            if (formData.numRecords < limits.numRecords.min || formData.numRecords > limits.numRecords.max) {
+            if (numRecordsValue < limits.numRecords.min || numRecordsValue > limits.numRecords.max) {
                 showError(`Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}`);
                 return;
             }
         } else {
-            if (formData.totalRecords < 101 || formData.totalRecords > 100000) {
-                showError('Total records for pagination must be between 101 and 100,000');
+            if (numRecordsValue < 10 || numRecordsValue > 1000000) {
+                showError('Number of records must be between 10 and 1,000,000 for pagination');
                 return;
             }
         }
@@ -113,7 +118,23 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // Performance validation removed - no limits on total fields
+        // Enhanced validation and performance warnings
+        const validationResult = validateFormData(formData, enablePagination, numRecordsValue, limits);
+        if (!validationResult.isValid) {
+            showError(validationResult.error);
+            return;
+        }
+
+        const performanceWarnings = checkPerformanceWarnings(formData, enablePagination, numRecordsValue);
+        if (performanceWarnings.length > 0) {
+            const proceed = confirm(
+                `⚠️ Performance Warning:\n\n${performanceWarnings.join('\n')}\n\nThis may take longer to generate. Continue?`
+            );
+            if (!proceed) {
+                resetGenerateButton();
+                return;
+            }
+        }
 
         if (enablePagination) {
             await generatePaginatedData(formData);
@@ -165,7 +186,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Generate data function
     async function generateData(formData) {
-        showLoading();
+        const isLargeDataset = (formData.numRecords > 1000) || 
+                              (formData.numFields * formData.numRecords > 5000);
+        
+        showLoading(isLargeDataset);
+        
+        let startTime = Date.now();
+        let progressInterval;
+        
+        if (isLargeDataset) {
+            // Simulate progress for large datasets
+            progressInterval = setInterval(() => {
+                const elapsed = Date.now() - startTime;
+                const estimatedTotal = Math.max(2000, formData.numRecords * 2); // Rough estimate
+                const progress = Math.min(90, (elapsed / estimatedTotal) * 100);
+                const remainingMs = (estimatedTotal - elapsed) * (100 - progress) / progress;
+                const estimate = remainingMs > 1000 ? `~${Math.ceil(remainingMs/1000)}s remaining` : 'Almost done...';
+                updateProgress(progress, estimate);
+            }, 200);
+        }
         
         try {
             const response = await fetch('/generate-data', {
@@ -176,23 +215,53 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(formData)
             });
 
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                updateProgress(100, 'Complete!');
+            }
+
             const result = await response.json();
 
             if (response.ok && result.success) {
                 generatedData = result.data;
                 currentSession = null; // Clear any existing session
-                displayResult(generatedData, null);
+                
+                if (isLargeDataset) {
+                    // Brief delay to show completion
+                    setTimeout(() => {
+                        displayResult(generatedData, null);
+                    }, 500);
+                } else {
+                    displayResult(generatedData, null);
+                }
             } else {
                 showError(result.error || 'An error occurred while generating data');
             }
         } catch (error) {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
             showError('Network error: ' + error.message);
         }
     }
 
     // Generate paginated data function
     async function generatePaginatedData(formData) {
-        showLoading();
+        const isLargeDataset = formData.totalRecords > 10000;
+        showLoading(isLargeDataset);
+        
+        let progressInterval;
+        if (isLargeDataset) {
+            let startTime = Date.now();
+            progressInterval = setInterval(() => {
+                const elapsed = Date.now() - startTime;
+                const estimatedTotal = Math.max(3000, formData.totalRecords * 0.5);
+                const progress = Math.min(90, (elapsed / estimatedTotal) * 100);
+                const remainingMs = (estimatedTotal - elapsed) * (100 - progress) / progress;
+                const estimate = remainingMs > 1000 ? `~${Math.ceil(remainingMs/1000)}s remaining` : 'Setting up pagination...';
+                updateProgress(progress, estimate);
+            }, 200);
+        }
         
         try {
             const response = await fetch('/generate-paginated', {
@@ -203,6 +272,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(formData)
             });
 
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                updateProgress(100, 'Complete!');
+            }
+
             const result = await response.json();
 
             if (response.ok && result.success) {
@@ -211,11 +285,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     sessionId: result.sessionId,
                     pagination: result.pagination
                 };
-                displayResult(generatedData, currentSession);
+                
+                if (isLargeDataset) {
+                    setTimeout(() => {
+                        displayResult(generatedData, currentSession);
+                    }, 500);
+                } else {
+                    displayResult(generatedData, currentSession);
+                }
             } else {
                 showError(result.error || 'An error occurred while generating paginated data');
             }
         } catch (error) {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
             showError('Network error: ' + error.message);
         }
     }
@@ -257,8 +341,21 @@ document.addEventListener('DOMContentLoaded', function() {
         if (session && session.pagination) {
             const { currentPage, totalPages, totalRecords, recordsInCurrentPage } = session.pagination;
             recordCount.textContent = `${recordsInCurrentPage} records (Page ${currentPage} of ${totalPages}, ${totalRecords} total)`;
+            
+            // Show session info in result-stats
+            const sessionInfo = document.getElementById('sessionInfo');
+            if (sessionInfo) {
+                sessionInfo.textContent = `Session: ${session.sessionId.slice(-8)}`;
+                sessionInfo.style.display = 'inline';
+            }
         } else {
             recordCount.textContent = `${data.length} records`;
+            
+            // Hide session info for regular mode
+            const sessionInfo = document.getElementById('sessionInfo');
+            if (sessionInfo) {
+                sessionInfo.style.display = 'none';
+            }
         }
         
         const jsonSize = new Blob([JSON.stringify(data)]).size;
@@ -283,12 +380,6 @@ document.addEventListener('DOMContentLoaded', function() {
     function updatePaginationControls(session) {
         const { pagination, sessionId } = session;
         const { currentPage, totalPages, totalRecords, hasNextPage, hasPreviousPage, nextUrl, prevUrl } = pagination;
-
-        // Update pagination info
-        const paginationInfo = document.getElementById('paginationInfo');
-        const sessionInfo = document.getElementById('sessionInfo');
-        paginationInfo.textContent = `${totalRecords} total records`;
-        sessionInfo.textContent = `Session: ${sessionId.slice(-8)}`; // Show last 8 chars of session ID
 
         // Update page indicator
         const pageIndicator = document.getElementById('pageIndicator');
@@ -324,11 +415,122 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Show loading state
-    function showLoading() {
+    function showLoading(showProgress = false) {
         hideAllSections();
         loadingSection.style.display = 'block';
         generateBtn.disabled = true;
         generateBtn.innerHTML = '<span class="btn-icon">⏳</span>Generating...';
+        
+        const progressContainer = document.getElementById('progressContainer');
+        const loadingText = document.getElementById('loadingText');
+        
+        if (showProgress) {
+            progressContainer.style.display = 'block';
+            loadingText.textContent = 'Generating large dataset...';
+            resetProgress();
+        } else {
+            progressContainer.style.display = 'none';
+            loadingText.textContent = 'Generating your realistic data...';
+        }
+    }
+
+    function updateProgress(percentage, estimate = '') {
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const progressEstimate = document.getElementById('progressEstimate');
+        
+        if (progressFill && progressText) {
+            progressFill.style.width = `${percentage}%`;
+            progressText.textContent = `${Math.round(percentage)}%`;
+            if (progressEstimate && estimate) {
+                progressEstimate.textContent = estimate;
+            }
+        }
+    }
+
+    function resetProgress() {
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const progressEstimate = document.getElementById('progressEstimate');
+        
+        if (progressFill && progressText) {
+            progressFill.style.width = '0%';
+            progressText.textContent = '0%';
+            if (progressEstimate) {
+                progressEstimate.textContent = '';
+            }
+        }
+    }
+
+    // Enhanced validation function
+    function validateFormData(formData, enablePagination, numRecordsValue, limits) {
+        // Check for negative values
+        if (formData.numFields <= 0 || formData.numObjects < 0 || formData.numNesting < 0 || formData.nestedFields < 0) {
+            return { isValid: false, error: 'All values must be non-negative (fields must be at least 1)' };
+        }
+
+        // Check for decimal values where integers are expected
+        if (!Number.isInteger(formData.numFields) || !Number.isInteger(formData.numObjects) || 
+            !Number.isInteger(formData.numNesting) || !Number.isInteger(formData.nestedFields) || 
+            !Number.isInteger(numRecordsValue)) {
+            return { isValid: false, error: 'All values must be whole numbers' };
+        }
+
+        // Logical validation
+        if (formData.numObjects > 0 && formData.numNesting === 0) {
+            return { isValid: false, error: 'Cannot have nested objects (> 0) with nesting depth of 0' };
+        }
+
+        if (formData.numNesting > 0 && formData.numObjects === 0) {
+            return { isValid: false, error: 'Cannot have nesting depth (> 0) without any nested objects' };
+        }
+
+        if (formData.numObjects > 0 && formData.nestedFields === 0) {
+            return { isValid: false, error: 'Nested objects need at least 1 field each' };
+        }
+
+        // Memory usage estimation
+        const estimatedTotalFields = formData.numFields + (formData.numObjects * formData.nestedFields * Math.pow(2, formData.numNesting));
+        const estimatedMemoryMB = (estimatedTotalFields * numRecordsValue * 50) / (1024 * 1024); // Rough estimate
+        
+        if (estimatedMemoryMB > 500) {
+            return { isValid: false, error: `Estimated memory usage too high (~${Math.round(estimatedMemoryMB)}MB). Please reduce complexity or use pagination.` };
+        }
+
+        return { isValid: true };
+    }
+
+    // Performance warning function
+    function checkPerformanceWarnings(formData, enablePagination, numRecordsValue) {
+        const warnings = [];
+        
+        // High record count warning
+        if (!enablePagination && numRecordsValue > 5000) {
+            warnings.push(`• ${numRecordsValue.toLocaleString()} records is quite large. Consider using pagination.`);
+        }
+
+        // High field count warning
+        if (formData.numFields > 100) {
+            warnings.push(`• ${formData.numFields} fields per record may slow generation.`);
+        }
+
+        // Deep nesting warning
+        if (formData.numNesting > 3) {
+            warnings.push(`• Nesting depth of ${formData.numNesting} creates complex structures.`);
+        }
+
+        // Complex nested structure warning
+        const totalNestedFields = formData.numObjects * formData.nestedFields * Math.pow(2, formData.numNesting);
+        if (totalNestedFields > 50) {
+            warnings.push(`• Complex nesting will create ~${totalNestedFields} nested fields per record.`);
+        }
+
+        // Uniform field length with large dataset
+        if (formData.uniformFieldLength && numRecordsValue > 2000) {
+            warnings.push(`• Fixed field lengths with ${numRecordsValue.toLocaleString()} records requires extra processing.`);
+        }
+
+        return warnings;
     }
 
     // Show error message

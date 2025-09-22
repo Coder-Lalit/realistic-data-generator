@@ -7,6 +7,40 @@ const http = require('http');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Logging configuration
+const LOG_LEVELS = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3
+};
+
+const CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? LOG_LEVELS[process.env.LOG_LEVEL.toUpperCase()] : LOG_LEVELS.INFO;
+
+// Logging utilities
+const logger = {
+    error: (message) => {
+        if (CURRENT_LOG_LEVEL >= LOG_LEVELS.ERROR) {
+            console.error(`❌ [ERROR] ${new Date().toISOString()} - ${message}`);
+        }
+    },
+    warn: (message) => {
+        if (CURRENT_LOG_LEVEL >= LOG_LEVELS.WARN) {
+            console.warn(`⚠️  [WARN] ${new Date().toISOString()} - ${message}`);
+        }
+    },
+    info: (message) => {
+        if (CURRENT_LOG_LEVEL >= LOG_LEVELS.INFO) {
+            console.log(`ℹ️  [INFO] ${new Date().toISOString()} - ${message}`);
+        }
+    },
+    debug: (message) => {
+        if (CURRENT_LOG_LEVEL >= LOG_LEVELS.DEBUG) {
+            console.log(`🐛 [DEBUG] ${new Date().toISOString()} - ${message}`);
+        }
+    }
+};
+
 // Configurable limits
 const CONFIG = {
     limits: {
@@ -116,13 +150,13 @@ function storeSchemaInCache(sessionId, config, fieldLengthMap) {
         expiresAt,
         createdAt: Date.now()
     });
-    console.log(`💾 Schema stored for session: ${sessionId} (expires at ${new Date(expiresAt).toISOString()})`);
+    logger.info(`Schema stored for session: ${sessionId.slice(-8)} (TTL: 10min)`);
     
     // Clean expired schemas periodically
     cleanExpiredSchemas();
 }
 
-// Function to retrieve schema from cache
+// Function to retrieve schema from cache and refresh TTL
 function getSchemaFromCache(sessionId) {
     const data = SCHEMA_CACHE.get(sessionId);
     if (!data) {
@@ -131,9 +165,15 @@ function getSchemaFromCache(sessionId) {
     
     if (Date.now() > data.expiresAt) {
         SCHEMA_CACHE.delete(sessionId);
-        console.log(`⏰ Schema expired and removed: ${sessionId}`);
+        logger.debug(`Schema expired and removed: ${sessionId.slice(-8)}`);
         return null;
     }
+    
+    // Refresh TTL on access
+    const newExpiresAt = Date.now() + SCHEMA_TTL;
+    data.expiresAt = newExpiresAt;
+    SCHEMA_CACHE.set(sessionId, data);
+    logger.debug(`TTL refreshed for session: ${sessionId.slice(-8)}`);
     
     return data;
 }
@@ -229,7 +269,7 @@ function generateFieldLengthMap() {
         lengthMap[fieldType] = availableLengths[Math.floor(Math.random() * availableLengths.length)];
     }
     
-    console.log('🎲 Generated random field length schema:', lengthMap);
+    logger.debug('Generated random field length schema:', lengthMap);
     return lengthMap;
 }
 
@@ -268,6 +308,7 @@ app.get('/config', (req, res) => {
 app.post('/generate-data', (req, res) => {
     try {
         const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
+        logger.info(`Data generation request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
 
         // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
@@ -382,6 +423,7 @@ app.post('/data', (req, res) => {
 app.post('/generate-paginated', (req, res) => {
     try {
         const { numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength } = req.body;
+        logger.info(`Pagination request: ${totalRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
 
         // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
@@ -415,9 +457,9 @@ app.post('/generate-paginated', (req, res) => {
             });
         }
 
-        if (totalRecords < 1 || totalRecords > 100000) {
+        if (totalRecords < 1 || totalRecords > 1000000) {
             return res.status(400).json({ 
-                error: 'Total records must be between 1 and 100,000 for pagination' 
+                error: 'Total records must be between 1 and 1,000,000 for pagination' 
             });
         }
 
@@ -703,7 +745,7 @@ function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniform
         processedValue = enforceUniformLength(processedValue, fieldType, useUniformLength);
         const finalLength = String(processedValue).length;
         if (originalLength !== finalLength) {
-            console.log(`📏 Adjusted field '${fieldName}' (${fieldType}) length: ${originalLength} → ${finalLength} (target: ${targetLength})`);
+            logger.debug(`Field '${fieldName}' (${fieldType}) length: ${originalLength} → ${finalLength} (target: ${targetLength})`);
         }
     }
     
@@ -919,7 +961,8 @@ function generateFieldValue(fieldType) {
 }
 
 app.listen(PORT, () => {
-    console.log(`🚀 Data Generator Server running on http://localhost:${PORT}`);
+    logger.info(`Data Generator Server running on http://localhost:${PORT}`);
+    logger.info(`Log level: ${Object.keys(LOG_LEVELS).find(key => LOG_LEVELS[key] === CURRENT_LOG_LEVEL)}`);
     
     // Start health check ping every 5 minutes to keep app alive
     setInterval(() => {
@@ -931,15 +974,15 @@ app.listen(PORT, () => {
         };
 
         const req = http.request(options, (res) => {
-            console.log(`📡 Health check ping: ${res.statusCode} at ${new Date().toISOString()}`);
+            logger.debug(`Health check ping: ${res.statusCode}`);
         });
 
         req.on('error', (err) => {
-            console.error(`❌ Health check ping failed: ${err.message}`);
+            logger.error(`Health check ping failed: ${err.message}`);
         });
 
         req.end();
     }, 5 * 60 * 1000); // 5 minutes in milliseconds
     
-    console.log(`💓 Health check ping scheduled every 5 minutes`);
+    logger.debug(`Health check ping scheduled every 5 minutes`);
 }); 
