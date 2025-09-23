@@ -302,16 +302,21 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Health check endpoint
+// Health check endpoint for keep-alive and monitoring
 app.get('/ping', (req, res) => {
     const status = {
-        status: 'ok',
+        success: true,
+        message: 'pong',
+        status: 'healthy',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         version: '1.0.0',
-        environment: process.env.NODE_ENV || 'development'
+        environment: process.env.NODE_ENV || 'development',
+        activeSessions: SCHEMA_CACHE.size
     };
+    
+    logger.debug('Ping request received');
     res.json(status);
 });
 
@@ -327,6 +332,7 @@ app.get('/config', (req, res) => {
         config: CONFIG
     });
 });
+
 
 // Data generation endpoint
 app.post('/generate-data', (req, res) => {
@@ -621,9 +627,7 @@ app.post('/generate-paginated', (req, res) => {
         const hasNextPage = currentPageNumber < totalPages;
         const hasPreviousPage = currentPageNumber > 1;
 
-        // Generate URLs for navigation (POST endpoints without session IDs in URL)
-        const nextUrl = hasNextPage ? `/generate-paginated` : null;
-        const prevUrl = hasPreviousPage ? `/generate-paginated` : null;
+        // Generate page numbers for navigation
         const nextPageNumber = hasNextPage ? currentPageNumber + 1 : null;
         const prevPageNumber = hasPreviousPage ? currentPageNumber - 1 : null;
 
@@ -639,8 +643,6 @@ app.post('/generate-paginated', (req, res) => {
                 recordsInCurrentPage: recordsToGenerate,
                 hasNextPage,
                 hasPreviousPage,
-                nextUrl,
-                prevUrl,
                 nextPageNumber,
                 prevPageNumber
             }
