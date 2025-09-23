@@ -792,13 +792,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    function showPingSection() {
-        document.getElementById('pingSection').style.display = 'block';
-    }
-    
-    function hidePingSection() {
-        document.getElementById('pingSection').style.display = 'none';
-    }
     
     function startAutoKeepAlive() {
         if (autoKeepAliveInterval) {
@@ -822,14 +815,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Ping button event listener
-    const pingBtn = document.getElementById('pingBtn');
-    if (pingBtn) {
-        pingBtn.addEventListener('click', async () => {
-            showPingSection();
-            await pingServer();
-        });
-    }
     
     // Start auto keep-alive when the page loads
     startAutoKeepAlive();
