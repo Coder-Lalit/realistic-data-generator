@@ -733,4 +733,109 @@ document.addEventListener('DOMContentLoaded', function() {
             nestedFieldsHelp.textContent = `Range: ${limits.nestedFields.min}-${limits.nestedFields.max} | Default: ${limits.nestedFields.default}`;
         }
     }
+
+    // Ping functionality
+    let autoKeepAliveInterval;
+    
+    async function pingServer() {
+        const pingStatus = document.getElementById('pingStatus');
+        const pingTime = document.getElementById('pingTime');
+        const serverUptime = document.getElementById('serverUptime');
+        const activeSessions = document.getElementById('activeSessions');
+        const memoryUsage = document.getElementById('memoryUsage');
+        
+        // Update status to checking
+        pingStatus.textContent = 'Checking...';
+        pingStatus.className = 'checking';
+        
+        const startTime = Date.now();
+        
+        try {
+            const response = await fetch('/ping');
+            const data = await response.json();
+            const endTime = Date.now();
+            const responseTime = endTime - startTime;
+            
+            if (data.success && data.status === 'healthy') {
+                // Update status to healthy
+                pingStatus.textContent = 'Healthy';
+                pingStatus.className = 'healthy';
+                
+                // Update ping time
+                pingTime.textContent = `${responseTime}ms`;
+                
+                // Update server details
+                const uptimeHours = Math.floor(data.uptime / 3600);
+                const uptimeMinutes = Math.floor((data.uptime % 3600) / 60);
+                serverUptime.textContent = `Uptime: ${uptimeHours}h ${uptimeMinutes}m`;
+                
+                activeSessions.textContent = `Active Sessions: ${data.activeSessions}`;
+                
+                const memoryUsedMB = Math.round(data.memory.heapUsed / 1024 / 1024);
+                const memoryTotalMB = Math.round(data.memory.heapTotal / 1024 / 1024);
+                memoryUsage.textContent = `Memory: ${memoryUsedMB}MB / ${memoryTotalMB}MB`;
+                
+                console.log('🏓 Ping successful:', data);
+            } else {
+                throw new Error('Server not healthy');
+            }
+        } catch (error) {
+            // Update status to error
+            pingStatus.textContent = 'Error';
+            pingStatus.className = 'error';
+            pingTime.textContent = 'Failed';
+            serverUptime.textContent = 'Uptime: Unknown';
+            activeSessions.textContent = 'Active Sessions: Unknown';
+            memoryUsage.textContent = 'Memory: Unknown';
+            
+            console.error('🏓 Ping failed:', error);
+        }
+    }
+    
+    function showPingSection() {
+        document.getElementById('pingSection').style.display = 'block';
+    }
+    
+    function hidePingSection() {
+        document.getElementById('pingSection').style.display = 'none';
+    }
+    
+    function startAutoKeepAlive() {
+        if (autoKeepAliveInterval) {
+            clearInterval(autoKeepAliveInterval);
+        }
+        
+        // Ping every 5 minutes (300,000 milliseconds)
+        autoKeepAliveInterval = setInterval(() => {
+            console.log('🕒 Auto keep-alive ping...');
+            pingServer();
+        }, 5 * 60 * 1000);
+        
+        console.log('🔄 Auto keep-alive started (every 5 minutes)');
+    }
+    
+    function stopAutoKeepAlive() {
+        if (autoKeepAliveInterval) {
+            clearInterval(autoKeepAliveInterval);
+            autoKeepAliveInterval = null;
+            console.log('⏹️ Auto keep-alive stopped');
+        }
+    }
+    
+    // Ping button event listener
+    const pingBtn = document.getElementById('pingBtn');
+    if (pingBtn) {
+        pingBtn.addEventListener('click', async () => {
+            showPingSection();
+            await pingServer();
+        });
+    }
+    
+    // Start auto keep-alive when the page loads
+    startAutoKeepAlive();
+    
+    // Optional: Stop auto keep-alive when the page is about to unload
+    window.addEventListener('beforeunload', () => {
+        stopAutoKeepAlive();
+    });
 }); 

@@ -607,4 +607,108 @@ button {
     .page-indicator-small {
         width: 100%;
     }
+}
+
+/* Ping Section Styles */
+.ping-section {
+    margin: 20px auto;
+    padding: 20px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    max-width: 800px;
+    border: 1px solid #e5e7eb;
+}
+
+.ping-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.ping-header h3 {
+    margin: 0;
+    color: #1f2937;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.ping-stats {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    font-size: 0.85rem;
+}
+
+.ping-stats span {
+    color: #6b7280;
+}
+
+#pingStatus {
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+
+#pingStatus.healthy {
+    background-color: #d1fae5;
+    color: #065f46;
+}
+
+#pingStatus.checking {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+#pingStatus.error {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.ping-details {
+    margin-top: 10px;
+}
+
+.ping-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+    font-size: 0.8rem;
+    color: #6b7280;
+}
+
+.ping-info span {
+    padding: 6px 10px;
+    background-color: #f9fafb;
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+}
+
+/* Mobile responsiveness for ping section */
+@media (max-width: 768px) {
+    .ping-section {
+        margin: 15px;
+        padding: 15px;
+    }
+    
+    .ping-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+    
+    .ping-stats {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .ping-info {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
 } 

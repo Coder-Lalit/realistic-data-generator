@@ -88,8 +88,29 @@
                         <span class="btn-icon">💾</span>
                         Download JSON
                     </button>
+                    <button type="button" id="pingBtn">
+                        <span class="btn-icon">🏓</span>
+                        Ping Server
+                    </button>
                 </div>
             </form>
+        </div>
+
+        <div id="pingSection" class="ping-section" style="display: none;">
+            <div class="ping-header">
+                <h3>🏓 Server Status</h3>
+                <div class="ping-stats">
+                    <span id="pingStatus">Checking...</span>
+                    <span id="pingTime"></span>
+                </div>
+            </div>
+            <div class="ping-details">
+                <div class="ping-info">
+                    <span id="serverUptime"></span>
+                    <span id="activeSessions"></span>
+                    <span id="memoryUsage"></span>
+                </div>
+            </div>
         </div>
 
         <div id="loadingSection" class="loading-section" style="display: none;">
