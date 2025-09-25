@@ -172,13 +172,14 @@ async function testNaturalLengthPagination() {
                 // Make multiple calls to same page
                 const pagePayload = {
                     ...sessionData,
+                    sessionId: sessionId,
                     pageNumber: pageNum
                 };
-                const call1 = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
+                const call1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', pagePayload);
                 await new Promise(resolve => setTimeout(resolve, 200));
-                const call2 = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
+                const call2 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', pagePayload);
                 await new Promise(resolve => setTimeout(resolve, 200));
-                const call3 = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', pagePayload);
+                const call3 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', pagePayload);
 
                 if (!call1.success || !call2.success || !call3.success) {
                     console.log(`     ❌ Failed to fetch page data`);
@@ -214,10 +215,10 @@ async function testNaturalLengthPagination() {
         console.log('🌍 Step 6: Testing cross-page field variation...');
         
         try {
-            const page1Payload = { ...sessionData, pageNumber: 1 };
-            const page50Payload = { ...sessionData, pageNumber: 50 };
-            const page1Response = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', page1Payload);
-            const page50Response = await makeRequest(`http://localhost:3000/generate-paginated/${sessionId}`, 'POST', page50Payload);
+            const page1Payload = { ...sessionData, sessionId: sessionId, pageNumber: 1 };
+            const page50Payload = { ...sessionData, sessionId: sessionId, pageNumber: 50 };
+            const page1Response = await makeRequest('http://localhost:3000/generate-paginated', 'POST', page1Payload);
+            const page50Response = await makeRequest('http://localhost:3000/generate-paginated', 'POST', page50Payload);
             
             if (page1Response.success && page50Response.success) {
                 const record1 = page1Response.data[0];

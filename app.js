@@ -202,98 +202,46 @@ function getSchemaFromCache(sessionId) {
     return data;
 }
 
-// Function to generate random field length map
-function generateFieldLengthMap() {
+// Function to generate field length map from a sample record
+function generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields) {
+    logger.debug('Generating field length map from sample record...');
+    
+    // Generate one complete sample record with natural faker data
+    const sampleRecord = generateObject(numFields, numObjects, nestingLevel, nestedFields, false); // false = no uniform length
+    
     const lengthMap = {};
     
-    // Create different length categories for variety
-    const lengthCategories = {
-        veryShort: [3, 4, 5],
-        short: [6, 7, 8, 9, 10],
-        medium: [11, 12, 13, 14, 15, 16, 17, 18],
-        long: [19, 20, 21, 22, 23, 24, 25],
-        veryLong: [26, 27, 28, 29, 30, 35, 40]
-    };
-    
-    for (const fieldType of FIELD_TYPES) {
-        let selectedCategory;
-        
-        // Assign categories based on field type characteristics, but with some randomness
-        switch (fieldType) {
-            case 'uuid':
-            case 'nanoid':
-                // These should keep their natural length - skip uniform length enforcement
-                lengthMap[fieldType] = null; // Special marker to skip length enforcement
-                continue;
+    // Extract field lengths from the sample record
+    function extractLengthsFromObject(obj, prefix = '') {
+        for (const [fieldName, fieldValue] of Object.entries(obj)) {
+            if (typeof fieldValue === 'object' && fieldValue !== null && !Array.isArray(fieldValue)) {
+                // Recursively handle nested objects
+                extractLengthsFromObject(fieldValue, `${prefix}${fieldName}.`);
+            } else {
+                // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+                const fieldType = fieldName.split('_')[0];
                 
-            case 'age':
-            case 'rating':
-            case 'number':
-            case 'port':
-                selectedCategory = Math.random() < 0.8 ? 'veryShort' : 'short';
-                break;
+                // Special handling for certain field types that should keep natural length
+                if (['uuid', 'nanoid'].includes(fieldType)) {
+                    lengthMap[fieldType] = null; // Skip length enforcement for these
+                    continue;
+                }
                 
-            case 'boolean':
-            case 'currency':
-            case 'zipCode':
-            case 'fileExtension':
-                selectedCategory = Math.random() < 0.7 ? 'veryShort' : 'short';
-                break;
+                // Convert value to string and get its length
+                const stringValue = String(fieldValue);
+                const actualLength = stringValue.length;
                 
-            case 'firstName':
-            case 'lastName':
-            case 'middleName':
-            case 'city':
-            case 'state':
-            case 'country':
-            case 'color':
-            case 'weekday':
-            case 'month':
-                selectedCategory = Math.random() < 0.6 ? 'short' : 'medium';
-                break;
+                // Store the actual length from the sample
+                lengthMap[fieldType] = actualLength;
                 
-            case 'fullName':
-            case 'email':
-            case 'website':
-            case 'username':
-            case 'company':
-            case 'jobTitle':
-            case 'phone':
-            case 'phoneNumber':
-                selectedCategory = Math.random() < 0.5 ? 'medium' : 'long';
-                break;
-                
-            case 'address':
-            case 'description':
-            case 'sentence':
-            case 'title':
-            case 'productName':
-            case 'productDescription':
-            case 'catchPhrase':
-            case 'buzzword':
-                selectedCategory = Math.random() < 0.4 ? 'long' : 'veryLong';
-                break;
-                
-            case 'paragraph':
-            case 'bio':
-            case 'userAgent':
-            case 'directoryPath':
-                selectedCategory = Math.random() < 0.8 ? 'veryLong' : 'long';
-                break;
-                
-            default:
-                // Random assignment for other fields
-                const categories = Object.keys(lengthCategories);
-                selectedCategory = categories[Math.floor(Math.random() * categories.length)];
-                break;
+                logger.debug(`Field type '${fieldType}': sample value '${stringValue}' -> length ${actualLength}`);
+            }
         }
-        
-        // Pick a random length from the selected category
-        const availableLengths = lengthCategories[selectedCategory];
-        lengthMap[fieldType] = availableLengths[Math.floor(Math.random() * availableLengths.length)];
     }
     
-    logger.debug('Generated random field length schema:', lengthMap);
+    extractLengthsFromObject(sampleRecord);
+    
+    logger.info(`Generated field length map from sample record with ${Object.keys(lengthMap).length} field types`);
     return lengthMap;
 }
 
@@ -637,7 +585,7 @@ app.post('/generate-paginated', (req, res) => {
             
             // Generate field length map if uniform length is requested
             if (finalUniformLength) {
-                fieldLengthMap = generateFieldLengthMap();
+                fieldLengthMap = generateFieldLengthMapFromSample(numFields, numObjects, numNesting, finalNestedFields);
             }
             
             // Store in cache for new sessions
@@ -726,8 +674,8 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
     if (useUniformLength) {
         // Only generate new map if no map exists (for initial session creation)
         if (!FIELD_LENGTH_MAP || Object.keys(FIELD_LENGTH_MAP).length === 0) {
-            FIELD_LENGTH_MAP = generateFieldLengthMap();
-            logger.debug(`Generated new field length map for uniform length data`);
+            FIELD_LENGTH_MAP = generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields);
+            logger.debug(`Generated new field length map from sample record for uniform length data`);
         }
     } else {
         // For non-uniform length, completely skip schema generation
@@ -855,9 +803,7 @@ function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniform
     if (!fieldName.toLowerCase().startsWith('emoji')) {
         // Check if the field contains emojis and remove them if found
         if (containsEmoji(processedValue)) {
-            console.log(`⚠️  Emoji detected in field '${fieldName}': ${processedValue}`);
             processedValue = removeEmojis(processedValue);
-            console.log(`✅ Cleaned field '${fieldName}': ${processedValue}`);
         }
     }
     
