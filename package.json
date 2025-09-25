@@ -10,7 +10,8 @@
     "test:fixed": "node tests/test-fixed-length-pagination.js",
     "test:natural": "node tests/test-natural-length-pagination.js",
     "test:compare": "node tests/test-comprehensive-comparison.js",
-    "test:pagesize": "node tests/test-configurable-page-size.js"
+    "test:pagesize": "node tests/test-configurable-page-size.js",
+    "test:fieldlength": "node tests/test-field-length-validation.js"
   },
   "keywords": ["data-generator", "faker", "json", "realistic-data"],
   "author": "",

@@ -334,6 +334,72 @@ app.get('/config', (req, res) => {
 });
 
 
+// Data endpoint - returns just the data array (same as /generate-data but only returns data)
+app.post('/data', (req, res) => {
+    try {
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
+        logger.info(`Data request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
+
+        // Set defaults if not provided
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+
+        // Validate input
+        if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
+            return res.status(400).json({ 
+                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
+            });
+        }
+
+        const limits = CONFIG.limits;
+
+        // Validate numFields
+        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+            return res.status(400).json({ 
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
+            });
+        }
+
+        // Validate numObjects
+        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+            return res.status(400).json({ 
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
+            });
+        }
+
+        // Validate numNesting
+        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+            return res.status(400).json({ 
+                error: `Nesting level must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
+            });
+        }
+
+        // Validate numRecords
+        if (numRecords < limits.numRecords.min || numRecords > limits.numRecords.max) {
+            return res.status(400).json({ 
+                error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
+            });
+        }
+
+        // Validate nestedFields
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({ 
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
+            });
+        }
+
+        // Generate data
+        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
+
+        // Return only the data array
+        res.json(data);
+
+    } catch (error) {
+        logger.error('Error generating data:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Data generation endpoint
 app.post('/generate-data', (req, res) => {
     try {
@@ -766,28 +832,15 @@ function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
     let stringValue = String(fieldValue);
     
     if (stringValue.length > targetLength) {
-        // Truncate and add ellipsis if too long (but ensure minimum length of 3 for ellipsis)
-        if (targetLength <= 3) {
-            return stringValue.substring(0, targetLength);
-        } else {
-            return stringValue.substring(0, targetLength - 3) + '...';
-        }
+        // Truncate to exact target length for ALL field types
+        return stringValue.substring(0, targetLength);
     } else if (stringValue.length < targetLength) {
-        // For specific field types, pad to exact length
-        if (['number', 'age', 'rating', 'port', 'zipCode', 'boolean'].includes(fieldType)) {
-            return stringValue.padEnd(targetLength, ' ');
+        // Pad ALL field types to exact target length
+        const additionalChars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        while (stringValue.length < targetLength) {
+            const randomIndex = Math.floor(faker.number.float({ min: 0, max: 1 }) * additionalChars.length);
+            stringValue += additionalChars[randomIndex];
         }
-        // For text fields, generate additional content to reach target length
-        if (['firstName', 'lastName', 'fullName', 'middleName', 'city', 'state', 'country'].includes(fieldType)) {
-            // For names, add random characters using seeded faker for consistency
-            const additionalChars = 'abcdefghijklmnopqrstuvwxyz';
-            while (stringValue.length < targetLength) {
-                const randomIndex = Math.floor(faker.number.float({ min: 0, max: 1 }) * additionalChars.length);
-                stringValue += additionalChars[randomIndex];
-            }
-            return stringValue;
-        }
-        // For other fields, keep natural length if shorter than target
         return stringValue;
     }
     
