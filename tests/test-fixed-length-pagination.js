@@ -15,6 +15,24 @@
 
 const http = require('http');
 
+// Function to determine if a field type generates string values (same as in app.js)
+function isStringFieldType(fieldType) {
+    // Field types that generate non-string values
+    const nonStringFieldTypes = [
+        'age',           // number
+        'latitude',      // number  
+        'longitude',     // number
+        'salary',        // number
+        'price',         // number
+        'number',        // number
+        'rating',        // number
+        'port',          // number
+        'boolean'        // boolean
+    ];
+    
+    return !nonStringFieldTypes.includes(fieldType);
+}
+
 // Simple HTTP request function
 function makeRequest(url, method = 'GET', data = null) {
     return new Promise((resolve, reject) => {
@@ -93,7 +111,15 @@ async function testFixedLengthPagination() {
         if (firstPageData.length > 0) {
             const sampleRecord = firstPageData[0];
             for (const [fieldName, fieldValue] of Object.entries(sampleRecord)) {
-                expectedLengths[fieldName] = String(fieldValue).length;
+                // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+                const fieldType = fieldName.split('_')[0];
+                
+                // Only track expected lengths for string field types
+                if (isStringFieldType(fieldType)) {
+                    expectedLengths[fieldName] = String(fieldValue).length;
+                } else {
+                    console.log(`   Skipping ${fieldName} (${fieldType}) - non-string field type`);
+                }
             }
         }
 
@@ -135,19 +161,23 @@ async function testFixedLengthPagination() {
                 for (let recordIndex = 0; recordIndex < Math.min(3, pageData.length); recordIndex++) {
                     const record = pageData[recordIndex];
                     for (const [fieldName, fieldValue] of Object.entries(record)) {
-                        const actualLength = String(fieldValue).length;
-                        const expectedLength = expectedLengths[fieldName];
-                        
-                        if (actualLength !== expectedLength) {
-                            inconsistencies.push({
-                                page: pageNum,
-                                record: recordIndex,
-                                field: fieldName,
-                                expected: expectedLength,
-                                actual: actualLength,
-                                value: fieldValue
-                            });
+                        // Only validate string fields for length consistency
+                        if (expectedLengths.hasOwnProperty(fieldName)) {
+                            const actualLength = String(fieldValue).length;
+                            const expectedLength = expectedLengths[fieldName];
+                            
+                            if (actualLength !== expectedLength) {
+                                inconsistencies.push({
+                                    page: pageNum,
+                                    record: recordIndex,
+                                    field: fieldName,
+                                    expected: expectedLength,
+                                    actual: actualLength,
+                                    value: fieldValue
+                                });
+                            }
                         }
+                        // Non-string fields are skipped (not in expectedLengths)
                     }
                 }
             } catch (error) {

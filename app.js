@@ -227,6 +227,12 @@ function generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, n
                     continue;
                 }
                 
+                // Skip length mapping for non-string field types
+                if (!isStringFieldType(fieldType)) {
+                    lengthMap[fieldType] = null; // Skip length enforcement for non-string fields
+                    continue;
+                }
+                
                 // Convert value to string and get its length
                 const stringValue = String(fieldValue);
                 const actualLength = stringValue.length;
@@ -768,10 +774,33 @@ function removeEmojis(text) {
     return text.replace(emojiRegex, '').trim();
 }
 
+// Function to determine if a field type generates string values
+function isStringFieldType(fieldType) {
+    // Field types that generate non-string values
+    const nonStringFieldTypes = [
+        'age',           // number
+        'latitude',      // number  
+        'longitude',     // number
+        'salary',        // number
+        'price',         // number
+        'number',        // number
+        'rating',        // number
+        'port',          // number
+        'boolean'        // boolean
+    ];
+    
+    return !nonStringFieldTypes.includes(fieldType);
+}
+
 // Function to enforce uniform field length based on field type
 function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
     if (!useUniformLength || !FIELD_LENGTH_MAP || !FIELD_LENGTH_MAP.hasOwnProperty(fieldType) || FIELD_LENGTH_MAP[fieldType] === null) {
         return fieldValue; // No length enforcement, no map, or special null marker
+    }
+    
+    // Only enforce length for string field types
+    if (!isStringFieldType(fieldType)) {
+        return fieldValue; // Skip length enforcement for non-string fields
     }
     
     const targetLength = FIELD_LENGTH_MAP[fieldType];

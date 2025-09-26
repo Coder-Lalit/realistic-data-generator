@@ -16,6 +16,24 @@
 
 const http = require('http');
 
+// Function to determine if a field type generates string values (same as in app.js)
+function isStringFieldType(fieldType) {
+    // Field types that generate non-string values
+    const nonStringFieldTypes = [
+        'age',           // number
+        'latitude',      // number  
+        'longitude',     // number
+        'salary',        // number
+        'price',         // number
+        'number',        // number
+        'rating',        // number
+        'port',          // number
+        'boolean'        // boolean
+    ];
+    
+    return !nonStringFieldTypes.includes(fieldType);
+}
+
 function makeRequest(url, method = 'GET', data = null) {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(url);
@@ -90,8 +108,14 @@ async function comprehensiveComparisonTest() {
         const fixedStats = {};
         for (const record of fixedData) {
             for (const [fieldName, fieldValue] of Object.entries(record)) {
-                if (!fixedStats[fieldName]) fixedStats[fieldName] = [];
-                fixedStats[fieldName].push(String(fieldValue).length);
+                // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+                const fieldType = fieldName.split('_')[0];
+                
+                // Only analyze string field types for length consistency
+                if (isStringFieldType(fieldType)) {
+                    if (!fixedStats[fieldName]) fixedStats[fieldName] = [];
+                    fixedStats[fieldName].push(String(fieldValue).length);
+                }
             }
         }
 
@@ -107,8 +131,14 @@ async function comprehensiveComparisonTest() {
         const naturalStats = {};
         for (const record of naturalData) {
             for (const [fieldName, fieldValue] of Object.entries(record)) {
-                if (!naturalStats[fieldName]) naturalStats[fieldName] = [];
-                naturalStats[fieldName].push(String(fieldValue).length);
+                // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+                const fieldType = fieldName.split('_')[0];
+                
+                // Only analyze string field types for length consistency
+                if (isStringFieldType(fieldType)) {
+                    if (!naturalStats[fieldName]) naturalStats[fieldName] = [];
+                    naturalStats[fieldName].push(String(fieldValue).length);
+                }
             }
         }
 
@@ -163,14 +193,22 @@ async function comprehensiveComparisonTest() {
 
         let fixedConsistency = true;
         for (const fieldName of Object.keys(fixedRecord1)) {
-            const len1 = String(fixedRecord1[fieldName]).length;
-            const len50 = String(fixedRecord50[fieldName]).length;
-            const len100 = String(fixedRecord100[fieldName]).length;
+            // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+            const fieldType = fieldName.split('_')[0];
             
-            const isConsistent = (len1 === len50) && (len50 === len100);
-            if (!isConsistent) fixedConsistency = false;
-            
-            console.log(`   ${fieldName}: ${isConsistent ? '✅' : '❌'} ${len1}=${len50}=${len100} chars ${isConsistent ? '(consistent)' : '(inconsistent)'}`);
+            // Only validate string fields for length consistency
+            if (isStringFieldType(fieldType)) {
+                const len1 = String(fixedRecord1[fieldName]).length;
+                const len50 = String(fixedRecord50[fieldName]).length;
+                const len100 = String(fixedRecord100[fieldName]).length;
+                
+                const isConsistent = (len1 === len50) && (len50 === len100);
+                if (!isConsistent) fixedConsistency = false;
+                
+                console.log(`   ${fieldName}: ${isConsistent ? '✅' : '❌'} ${len1}=${len50}=${len100} chars ${isConsistent ? '(consistent)' : '(inconsistent)'}`);
+            } else {
+                console.log(`   ${fieldName}: ⏭️  Skipped (${fieldType} - non-string field)`);
+            }
         }
 
         console.log();
@@ -185,14 +223,22 @@ async function comprehensiveComparisonTest() {
 
         let naturalVariation = false;
         for (const fieldName of Object.keys(naturalRecord1)) {
-            const len1 = String(naturalRecord1[fieldName]).length;
-            const len50 = String(naturalRecord50[fieldName]).length;
-            const len100 = String(naturalRecord100[fieldName]).length;
+            // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+            const fieldType = fieldName.split('_')[0];
             
-            const hasVariation = !((len1 === len50) && (len50 === len100));
-            if (hasVariation) naturalVariation = true;
-            
-            console.log(`   ${fieldName}: 🌿 ${len1}-${len50}-${len100} chars ${hasVariation ? '(natural variation)' : '(coincidentally same)'}`);
+            // Only analyze string fields for length variation
+            if (isStringFieldType(fieldType)) {
+                const len1 = String(naturalRecord1[fieldName]).length;
+                const len50 = String(naturalRecord50[fieldName]).length;
+                const len100 = String(naturalRecord100[fieldName]).length;
+                
+                const hasVariation = !((len1 === len50) && (len50 === len100));
+                if (hasVariation) naturalVariation = true;
+                
+                console.log(`   ${fieldName}: 🌿 ${len1}-${len50}-${len100} chars ${hasVariation ? '(natural variation)' : '(coincidentally same)'}`);
+            } else {
+                console.log(`   ${fieldName}: ⏭️  Skipped (${fieldType} - non-string field)`);
+            }
         }
 
         // Performance comparison

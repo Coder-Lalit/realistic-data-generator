@@ -12,6 +12,24 @@
 
 const http = require('http');
 
+// Function to determine if a field type generates string values (same as in app.js)
+function isStringFieldType(fieldType) {
+    // Field types that generate non-string values
+    const nonStringFieldTypes = [
+        'age',           // number
+        'latitude',      // number  
+        'longitude',     // number
+        'salary',        // number
+        'price',         // number
+        'number',        // number
+        'rating',        // number
+        'port',          // number
+        'boolean'        // boolean
+    ];
+    
+    return !nonStringFieldTypes.includes(fieldType);
+}
+
 // Test configuration matching your curl request
 const testConfig = {
     numFields: 200,
@@ -87,6 +105,15 @@ function analyzeFieldLengths(data) {
 
     // Analyze each field across all records
     fieldNames.forEach((fieldName, fieldIndex) => {
+        // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+        const fieldType = fieldName.split('_')[0];
+        
+        // Skip validation for non-string field types
+        if (!isStringFieldType(fieldType)) {
+            console.log(`   Skipping ${fieldName} (${fieldType}) - non-string field type`);
+            return; // Skip this field entirely
+        }
+
         const lengths = [];
         const lengthCounts = {};
         let hasInconsistency = false;

@@ -15,6 +15,24 @@
 
 const http = require('http');
 
+// Function to determine if a field type generates string values (same as in app.js)
+function isStringFieldType(fieldType) {
+    // Field types that generate non-string values
+    const nonStringFieldTypes = [
+        'age',           // number
+        'latitude',      // number  
+        'longitude',     // number
+        'salary',        // number
+        'price',         // number
+        'number',        // number
+        'rating',        // number
+        'port',          // number
+        'boolean'        // boolean
+    ];
+    
+    return !nonStringFieldTypes.includes(fieldType);
+}
+
 function makeRequest(url, method = 'GET', data = null) {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(url);
@@ -79,14 +97,20 @@ async function testNaturalLengthPagination() {
         const fieldStats = {};
         for (const record of firstPageData.slice(0, 10)) { // Sample first 10 records
             for (const [fieldName, fieldValue] of Object.entries(record)) {
-                if (!fieldStats[fieldName]) {
-                    fieldStats[fieldName] = [];
+                // Extract field type from field name (e.g., "firstName_2" -> "firstName")
+                const fieldType = fieldName.split('_')[0];
+                
+                // Only analyze string field types for length variation
+                if (isStringFieldType(fieldType)) {
+                    if (!fieldStats[fieldName]) {
+                        fieldStats[fieldName] = [];
+                    }
+                    fieldStats[fieldName].push(String(fieldValue).length);
                 }
-                fieldStats[fieldName].push(String(fieldValue).length);
             }
         }
 
-        console.log('📊 Field length analysis (first 10 records):');
+        console.log('📊 Field length analysis (first 10 records - string fields only):');
         for (const [fieldName, lengths] of Object.entries(fieldStats)) {
             const min = Math.min(...lengths);
             const max = Math.max(...lengths);
