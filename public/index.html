@@ -68,9 +68,19 @@
                         <small>Configurable page sizes</small>
                     </div>
 
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="storeIt" name="storeIt">
+                            <span class="checkmark"></span>
+                            💾 Store to MongoDB
+                        </label>
+                        <small>Persist data with 24-hour TTL</small>
+                    </div>
+
                     <div class="form-group" id="recordsPerPageGroup" style="display: none;">
-                        <label for="recordsPerPage">Records per Page</label>
-                        <input type="number" id="recordsPerPage" min="10" max="1000" value="100" required>
+                        <label for="recordsPerPage">Records per Page
+                            <input type="number" id="recordsPerPage" min="10" max="1000" value="100" required>
+                        </label>
                         <small id="recordsPerPageHelp">Range: 10-1000 | Default: 100</small>
                     </div>
                 </div>
@@ -128,6 +138,7 @@
                     <span id="recordCount"></span>
                     <span id="dataSize"></span>
                     <span id="sessionInfo" style="display: none;"></span>
+                    <span id="storageInfo" style="display: none;"></span>
                 </div>
             </div>
             

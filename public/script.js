@@ -51,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 numRecordsInput.max = 1000000;
                 numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, 1000000), 10);
                 recordsHelp.textContent = 'Range: 1-10000 | Default: 10';
-                recordsPerPageGroup.style.display = 'block';
+                recordsPerPageGroup.style.display = 'flex';
             } else {
                 // Restore original range and help text for regular mode
                 numRecordsInput.min = 1;
@@ -79,6 +79,7 @@ document.addEventListener('DOMContentLoaded', function() {
             totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
+            storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
             enablePagination: enablePagination
         };
@@ -379,6 +380,17 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const jsonSize = new Blob([JSON.stringify(data)]).size;
         dataSize.textContent = formatBytes(jsonSize);
+        
+        // Show MongoDB storage status if storeIt was enabled
+        const storageInfo = document.getElementById('storageInfo');
+        const storeItCheckbox = document.getElementById('storeIt');
+        if (storageInfo && storeItCheckbox && storeItCheckbox.checked) {
+            storageInfo.textContent = '💾 Stored to MongoDB';
+            storageInfo.style.display = 'inline';
+            storageInfo.style.color = '#22c55e'; // Green color for success
+        } else if (storageInfo) {
+            storageInfo.style.display = 'none';
+        }
         
         // Handle pagination controls
         const paginationControls = document.getElementById('paginationControls');

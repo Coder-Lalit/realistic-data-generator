@@ -3,9 +3,12 @@ const { faker } = require('@faker-js/faker');
 const cors = require('cors');
 const path = require('path');
 const http = require('http');
+const mongoose = require('mongoose');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 
 // Logging configuration
 const LOG_LEVELS = {
@@ -40,6 +43,78 @@ const logger = {
         }
     }
 };
+
+// MongoDB Connection
+const connectToMongoDB = async () => {
+    try {
+        if (process.env.MONGODB_URI) {
+            await mongoose.connect(process.env.MONGODB_URI);
+            logger.info('Connected to MongoDB successfully');
+        } else {
+            logger.warn('MONGODB_URI not found in environment variables - MongoDB storage disabled');
+        }
+    } catch (error) {
+        logger.error(`MongoDB connection failed: ${error.message}`);
+        logger.warn('Continuing without MongoDB - storage functionality disabled');
+    }
+};
+
+// MongoDB Schema for storing generated data
+const GeneratedDataSchema = new mongoose.Schema({
+    sessionId: {
+        type: String,
+        required: true,
+        index: true
+    },
+    requestParams: {
+        numFields: Number,
+        numObjects: Number,
+        numNesting: Number,
+        numRecords: Number,
+        nestedFields: Number,
+        uniformFieldLength: Boolean,
+        totalRecords: Number,
+        recordsPerPage: Number,
+        storeIt: Boolean
+    },
+    data: {
+        type: mongoose.Schema.Types.Mixed,
+        required: true
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now,
+        expires: 24 * 60 * 60 // 24 hours TTL
+    }
+});
+
+const GeneratedData = mongoose.model('GeneratedData', GeneratedDataSchema);
+
+// Function to store data to MongoDB
+async function storeDataToMongoDB(sessionId, requestParams, data) {
+    try {
+        if (!mongoose.connection.readyState) {
+            logger.warn('MongoDB not connected - skipping storage');
+            return null;
+        }
+
+        const generatedData = new GeneratedData({
+            sessionId,
+            requestParams,
+            data
+        });
+
+        const savedData = await generatedData.save();
+        logger.info(`Data stored to MongoDB with ID: ${savedData._id} (Session: ${sessionId})`);
+        return savedData._id;
+    } catch (error) {
+        logger.error(`Failed to store data to MongoDB: ${error.message}`);
+        return null;
+    }
+}
+
+// Initialize MongoDB connection
+connectToMongoDB();
 
 // Configurable limits
 const CONFIG = {
@@ -289,14 +364,15 @@ app.get('/config', (req, res) => {
 
 
 // Data endpoint - returns just the data array (same as /generate-data but only returns data)
-app.post('/data', (req, res) => {
+app.post('/data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
-        logger.info(`Data request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt } = req.body;
+        logger.info(`Data request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`);
 
         // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
         const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalStoreIt = storeIt !== undefined ? storeIt : false;
 
         // Validate input
         if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
@@ -345,6 +421,22 @@ app.post('/data', (req, res) => {
         // Generate data
         const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
 
+        // Store to MongoDB if requested
+        if (finalStoreIt) {
+            const sessionId = `data_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const requestParams = {
+                numFields,
+                numObjects,
+                numNesting,
+                numRecords,
+                nestedFields: finalNestedFields,
+                uniformFieldLength: finalUniformLength,
+                storeIt: finalStoreIt
+            };
+            
+            await storeDataToMongoDB(sessionId, requestParams, data);
+        }
+
         // Return only the data array
         res.json(data);
 
@@ -355,14 +447,15 @@ app.post('/data', (req, res) => {
 });
 
 // Data generation endpoint
-app.post('/generate-data', (req, res) => {
+app.post('/generate-data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
-        logger.info(`Data generation request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt } = req.body;
+        logger.info(`Data generation request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`);
 
         // Set defaults if not provided
         const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
         const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalStoreIt = storeIt !== undefined ? storeIt : false;
 
         // Validate input
         if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
@@ -407,72 +500,33 @@ app.post('/generate-data', (req, res) => {
         // Performance validation removed - no limits on total fields
 
         const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
+        
+        // Store to MongoDB if requested
+        if (finalStoreIt) {
+            const sessionId = `generate_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const requestParams = {
+                numFields,
+                numObjects,
+                numNesting,
+                numRecords,
+                nestedFields: finalNestedFields,
+                uniformFieldLength: finalUniformLength,
+                storeIt: finalStoreIt
+            };
+            
+            await storeDataToMongoDB(sessionId, requestParams, data);
+        }
+        
         res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Data-only endpoint (returns only data array without success wrapper)
-app.post('/data', (req, res) => {
-    try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength } = req.body;
-
-        // Set defaults if not provided
-        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
-
-        // Validate input
-        if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
-            });
-        }
-
-        // Validate limits using configuration
-        const limits = CONFIG.limits;
-        
-        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
-            return res.status(400).json({ 
-                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
-            });
-        }
-
-        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
-            return res.status(400).json({ 
-                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
-            });
-        }
-
-        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
-            return res.status(400).json({ 
-                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
-            });
-        }
-
-        if (numRecords < limits.numRecords.min || numRecords > limits.numRecords.max) {
-            return res.status(400).json({ 
-                error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
-            });
-        }
-
-        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
-            return res.status(400).json({ 
-                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
-            });
-        }
-
-        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
-        res.json(data); // Return only the data array
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
 // Unified paginated data generation endpoint - handles both new sessions and page navigation
-app.post('/generate-paginated', (req, res) => {
+app.post('/generate-paginated', async (req, res) => {
     try {
-        const { sessionId, pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength, recordsPerPage } = req.body;
+        const { sessionId, pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength, recordsPerPage, storeIt } = req.body;
         // Determine if this is a new session or existing session navigation
         const isNewSession = !sessionId || sessionId === null || sessionId === "";
         const currentPageNumber = pageNumber || 1;
