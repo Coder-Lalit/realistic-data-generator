@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 numRecordsInput.min = paginationMin;
                 numRecordsInput.max = paginationMax;
                 numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, paginationMax), paginationMin);
-                recordsHelp.textContent = `Range: ${paginationMin}-${paginationMax.toLocaleString()} | Default: 100 | Pagination Mode`;
+                recordsHelp.textContent = `Range: ${paginationMin}-${paginationMax.toLocaleString()} | Default: 100`;
                 recordsPerPageGroup.style.display = 'flex';
             } else {
                 // Restore original range and help text for regular mode
@@ -734,32 +734,32 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
 
-    // Generate cURL command for /data endpoint
+    // Generate cURL command for GET /data endpoint with URL parameters
     function generateCurlCommand(formData) {
         // Dynamic base URL handling - adapts to any environment
         const baseUrl = window.location.origin || `${window.location.protocol}//${window.location.host}`;
         const endpoint = '/data';
         
-        // Prepare the request body for /data endpoint (includes pagination params)
-        const requestBody = {
-            numFields: formData.numFields,
-            numObjects: formData.numObjects,
-            numNesting: formData.numNesting,
-            numRecords: formData.enablePagination ? formData.totalRecords : formData.numRecords,
-            nestedFields: formData.nestedFields,
-            uniformFieldLength: formData.uniformFieldLength,
-            storeIt: formData.storeIt
-        };
+        // Build URL parameters
+        const params = new URLSearchParams();
+        
+        // Add basic parameters
+        params.append('numFields', formData.numFields);
+        params.append('numObjects', formData.numObjects);
+        params.append('numNesting', formData.numNesting);
+        params.append('numRecords', formData.enablePagination ? formData.totalRecords : formData.numRecords);
+        params.append('nestedFields', formData.nestedFields);
+        params.append('uniformFieldLength', formData.uniformFieldLength);
+        params.append('storeIt', formData.storeIt);
 
         // Add pagination parameters if enabled
         if (formData.enablePagination) {
-            requestBody.enablePagination = true;
-            requestBody.recordsPerPage = formData.recordsPerPage;
+            params.append('enablePagination', 'true');
+            params.append('recordsPerPage', formData.recordsPerPage);
         }
 
-        const curlCommand = `curl -X POST "${baseUrl}${endpoint}" \\
-  -H "Content-Type: application/json" \\
-  -d '${JSON.stringify(requestBody, null, 2)}'`;
+        // Generate the GET cURL command
+        const curlCommand = `curl "${baseUrl}${endpoint}?${params.toString()}"`;
 
         return curlCommand;
     }
