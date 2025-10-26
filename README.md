@@ -244,6 +244,36 @@ Content-Type: application/json
 [...]
 ```
 
+#### **GET Data Endpoint (URL parameters)**
+```bash
+# Basic data generation
+GET /data?numFields=5&numObjects=0&numNesting=0&numRecords=100&nestedFields=0&uniformFieldLength=false&storeIt=false
+
+# Pagination (new session) - supports up to 100M records
+GET /data?numFields=5&numRecords=50000000&enablePagination=true&recordsPerPage=100
+
+# Pagination navigation (existing session)
+GET /data?enablePagination=true&sessionId=session_1234567890_abc123&pageNumber=2
+
+# Boolean parameters
+GET /data?numFields=3&numRecords=10&uniformFieldLength=true&storeIt=true
+```
+
+**Features:**
+- ✅ **All POST Parameters**: Supports every parameter available in POST `/data`
+- ✅ **Pagination Support**: Full pagination with session navigation
+- ✅ **Type Conversion**: Automatic string-to-type conversion for URL parameters
+- ✅ **Large Datasets**: Supports up to 100M records with pagination
+- ✅ **Easy Testing**: Test API directly in browser or with simple curl commands
+- ✅ **Shareable URLs**: Share exact data generation configurations via URL
+
+**Parameter Types:**
+- **Integers**: `numFields`, `numObjects`, `numNesting`, `numRecords`, `nestedFields`, `recordsPerPage`, `pageNumber`
+- **Booleans**: `uniformFieldLength=true/false`, `storeIt=true/false`, `enablePagination=true/false`
+- **Strings**: `sessionId`
+
+**Response:** Same as POST `/data` - returns array for regular requests or pagination object for paginated requests
+
 #### **Pagination Endpoint (for large datasets)**
 ```bash
 POST /generate-paginated
@@ -540,7 +570,9 @@ nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 → imei_86 
 - Nested Objects: 0-10
 - Fields per Nested Object: 0-50
 - Nesting Depth: 0-5
-- Records: 1-10000
+- Records (Regular): 1-20,000,000 (20M)
+- Records (Pagination): 1-100,000,000 (100M)
+- Records per Page: 10-1,000
 
 ## 🔬 Technical Implementation
 
@@ -653,6 +685,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Created automatic database connection with graceful fallback
 - ✅ Built session-based storage with unique identifiers
 - ✅ Added request metadata storage alongside generated data
+
+**🌐 GET API Endpoint**
+- ✅ Added GET `/data` endpoint with URL parameter support
+- ✅ Implemented automatic type conversion for query parameters
+- ✅ Full pagination support including session navigation via URL
+- ✅ Supports up to 100M records with pagination mode
+- ✅ Enhanced cURL generation with complete pagination parameters
+- ✅ Shareable URLs for data generation configurations
 
 **🔧 Technical Improvements**
 - ✅ Refactored field length enforcement algorithm

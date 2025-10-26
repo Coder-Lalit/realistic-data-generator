@@ -387,50 +387,55 @@ async function handlePaginatedRequest(req, res) {
         const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
         const finalRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : CONFIG.limits.recordsPerPage.default;
 
-        // Validate input
-        if (!numFields || numObjects === undefined || numNesting === undefined || !totalRecords) {
+        // Validate input - for new sessions, all parameters are required
+        // For existing sessions, only sessionId and pageNumber are needed
+        const isExistingSession = sessionId && sessionId !== null && sessionId !== "";
+        
+        if (!isExistingSession && (!numFields || numObjects === undefined || numNesting === undefined || !totalRecords)) {
             return res.status(400).json({ 
                 error: 'Missing required parameters: numFields, numObjects, numNesting, totalRecords' 
             });
         }
 
-        // Validate limits using configuration
-        const limits = CONFIG.limits;
-        
-        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
-            return res.status(400).json({ 
-                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
-            });
-        }
+        // Validate limits using configuration - only for new sessions
+        if (!isExistingSession) {
+            const limits = CONFIG.limits;
+            
+            if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+                return res.status(400).json({ 
+                    error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
+                });
+            }
 
-        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
-            return res.status(400).json({ 
-                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
-            });
-        }
+            if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+                return res.status(400).json({ 
+                    error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
+                });
+            }
 
-        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
-            return res.status(400).json({ 
-                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
-            });
-        }
+            if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+                return res.status(400).json({ 
+                    error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
+                });
+            }
 
-        if (totalRecords < limits.totalRecordsPagination.min || totalRecords > limits.totalRecordsPagination.max) {
-            return res.status(400).json({ 
-                error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination` 
-            });
-        }
+            if (totalRecords < limits.totalRecordsPagination.min || totalRecords > limits.totalRecordsPagination.max) {
+                return res.status(400).json({ 
+                    error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination` 
+                });
+            }
 
-        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
-            return res.status(400).json({ 
-                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
-            });
-        }
+            if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+                return res.status(400).json({ 
+                    error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
+                });
+            }
 
-        if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
-            return res.status(400).json({ 
-                error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}` 
-            });
+            if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
+                return res.status(400).json({ 
+                    error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}` 
+                });
+            }
         }
 
         // Performance warning for very large paginated datasets
@@ -562,28 +567,196 @@ async function handlePaginatedRequest(req, res) {
         const nextPageNumber = hasNextPage ? currentPageNumber + 1 : null;
         const prevPageNumber = hasPreviousPage ? currentPageNumber - 1 : null;
 
+        // Build pagination response
+        const paginationResponse = {
+            currentPage: currentPageNumber,
+            totalPages,
+            totalRecords: effectiveTotalRecords,
+            recordsPerPage: effectivePageSize,
+            recordsInCurrentPage: recordsToGenerate,
+            hasNextPage,
+            hasPreviousPage,
+            nextPageNumber,
+            prevPageNumber
+        };
+
+        // Add navigation URLs for GET requests
+        if (req.method === 'GET') {
+            const baseUrl = `${req.protocol}://${req.get('host')}/data`;
+            const baseParams = `enablePagination=true&sessionId=${finalSessionId}`;
+            
+            paginationResponse.nextUrl = hasNextPage ? 
+                `${baseUrl}?${baseParams}&pageNumber=${nextPageNumber}` : null;
+            paginationResponse.prevUrl = hasPreviousPage ? 
+                `${baseUrl}?${baseParams}&pageNumber=${prevPageNumber}` : null;
+        }
+
         res.json({
             success: true,
             sessionId: finalSessionId,
             data,
-            pagination: {
-                currentPage: currentPageNumber,
-                totalPages,
-                totalRecords: effectiveTotalRecords,
-                recordsPerPage: effectivePageSize,
-                recordsInCurrentPage: recordsToGenerate,
-                hasNextPage,
-                hasPreviousPage,
-                nextPageNumber,
-                prevPageNumber
-            }
+            pagination: paginationResponse
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 }
 
-// Data endpoint - returns just the data array (same as /generate-data but only returns data)
+// GET endpoint for /data - accepts parameters via URL query string
+app.get('/data', async (req, res) => {
+    try {
+        // Extract parameters from query string and convert to appropriate types
+        const {
+            numFields,
+            numObjects,
+            numNesting,
+            numRecords,
+            nestedFields,
+            uniformFieldLength,
+            storeIt,
+            enablePagination,
+            recordsPerPage,
+            sessionId,
+            pageNumber
+        } = req.query;
+
+        // Convert string parameters to appropriate types
+        const parsedParams = {
+            numFields: numFields ? parseInt(numFields) : undefined,
+            numObjects: numObjects !== undefined ? parseInt(numObjects) : undefined,
+            numNesting: numNesting !== undefined ? parseInt(numNesting) : undefined,
+            numRecords: numRecords ? parseInt(numRecords) : undefined,
+            nestedFields: nestedFields !== undefined ? parseInt(nestedFields) : undefined,
+            uniformFieldLength: uniformFieldLength === 'true',
+            storeIt: storeIt === 'true',
+            enablePagination: enablePagination === 'true',
+            recordsPerPage: recordsPerPage ? parseInt(recordsPerPage) : undefined,
+            sessionId: sessionId || undefined,
+            pageNumber: pageNumber ? parseInt(pageNumber) : undefined
+        };
+
+        // Create a mock request object with the parsed parameters in the body
+        const mockReq = {
+            body: parsedParams,
+            query: req.query,
+            headers: req.headers,
+            method: req.method,
+            protocol: req.protocol,
+            get: req.get.bind(req)
+        };
+
+        // If pagination is enabled, redirect to pagination logic
+        if (parsedParams.enablePagination) {
+            logger.info(`GET Data request (pagination): ${parsedParams.numRecords || 'existing session'} total records, ${parsedParams.numFields || 'cached'} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`);
+            
+            // Transform request to pagination format
+            const paginationRequest = {
+                numFields: parsedParams.numFields,
+                numObjects: parsedParams.numObjects,
+                numNesting: parsedParams.numNesting,
+                totalRecords: parsedParams.numRecords,
+                nestedFields: parsedParams.nestedFields,
+                uniformFieldLength: parsedParams.uniformFieldLength,
+                recordsPerPage: parsedParams.recordsPerPage,
+                pageNumber: parsedParams.pageNumber || 1,
+                sessionId: parsedParams.sessionId
+            };
+            
+            // Call the pagination logic directly
+            mockReq.body = paginationRequest;
+            return await handlePaginatedRequest(mockReq, res);
+        }
+        
+        logger.info(`GET Data request: ${parsedParams.numRecords} records, ${parsedParams.numFields} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`);
+
+        // Set defaults if not provided
+        const finalNestedFields = parsedParams.nestedFields !== undefined ? parsedParams.nestedFields : CONFIG.limits.nestedFields.default;
+        const finalUniformLength = parsedParams.uniformFieldLength !== undefined ? parsedParams.uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalStoreIt = parsedParams.storeIt !== undefined ? parsedParams.storeIt : false;
+
+        // Validate input
+        if (!parsedParams.numFields || parsedParams.numObjects === undefined || parsedParams.numNesting === undefined || !parsedParams.numRecords) {
+            return res.status(400).json({ 
+                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
+            });
+        }
+
+        const limits = CONFIG.limits;
+
+        // Validate numFields
+        if (parsedParams.numFields < limits.numFields.min || parsedParams.numFields > limits.numFields.max) {
+            return res.status(400).json({ 
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
+            });
+        }
+
+        // Validate numObjects
+        if (parsedParams.numObjects < limits.numObjects.min || parsedParams.numObjects > limits.numObjects.max) {
+            return res.status(400).json({ 
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
+            });
+        }
+
+        // Validate numNesting
+        if (parsedParams.numNesting < limits.numNesting.min || parsedParams.numNesting > limits.numNesting.max) {
+            return res.status(400).json({ 
+                error: `Nesting level must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
+            });
+        }
+
+        // Validate numRecords
+        if (parsedParams.numRecords < limits.numRecords.min || parsedParams.numRecords > limits.numRecords.max) {
+            return res.status(400).json({ 
+                error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
+            });
+        }
+
+        // Validate nestedFields
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({ 
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
+            });
+        }
+
+        // Performance warnings for large datasets
+        if (parsedParams.numRecords > 100000) {
+            logger.warn(`Large dataset requested: ${parsedParams.numRecords} records. Consider using pagination for better performance.`);
+        }
+        const estimatedMemoryMB = Math.ceil((parsedParams.numRecords * parsedParams.numFields * 50) / (1024 * 1024));
+        if (estimatedMemoryMB > 500) {
+            logger.warn(`Estimated memory usage: ~${estimatedMemoryMB}MB. Monitor server resources.`);
+        }
+
+        // Generate data
+        const data = generateRealisticData(
+            parsedParams.numFields, 
+            parsedParams.numObjects, 
+            parsedParams.numNesting, 
+            parsedParams.numRecords, 
+            finalNestedFields, 
+            finalUniformLength
+        );
+
+        // Store in MongoDB if requested
+        if (finalStoreIt) {
+            try {
+                const collection = db.collection('generated_data');
+                const result = await collection.insertMany(data);
+                logger.info(`Stored ${result.insertedCount} records in MongoDB`);
+            } catch (dbError) {
+                logger.error(`Failed to store data in MongoDB: ${dbError.message}`);
+                // Continue without storing - don't fail the request
+            }
+        }
+
+        res.json(data);
+    } catch (error) {
+        logger.error(`GET /data error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST endpoint for /data - returns just the data array (same as /generate-data but only returns data)
 app.post('/data', async (req, res) => {
     try {
         const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage } = req.body;
