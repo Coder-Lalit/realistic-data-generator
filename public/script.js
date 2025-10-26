@@ -47,17 +47,20 @@ document.addEventListener('DOMContentLoaded', function() {
             const recordsPerPageGroup = document.getElementById('recordsPerPageGroup');
             
             if (this.checked) {
-                // Update range for pagination mode, keep same help text
-                numRecordsInput.min = 10;
-                numRecordsInput.max = 1000000;
-                numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, 1000000), 10);
-                recordsHelp.textContent = 'Range: 1-10000 | Default: 10';
+                // Update range for pagination mode using higher limits
+                const paginationMin = 10;
+                const paginationMax = config ? config.limits.totalRecordsPagination.max : 100000000; // 100M for pagination
+                numRecordsInput.min = paginationMin;
+                numRecordsInput.max = paginationMax;
+                numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, paginationMax), paginationMin);
+                recordsHelp.textContent = `Range: ${paginationMin}-${paginationMax.toLocaleString()} | Default: 100 | Pagination Mode`;
                 recordsPerPageGroup.style.display = 'flex';
             } else {
                 // Restore original range and help text for regular mode
+                const regularMax = config ? config.limits.numRecords.max : 20000000;
                 numRecordsInput.min = 1;
-                numRecordsInput.max = 10000;
-                numRecordsInput.value = Math.min(parseInt(numRecordsInput.value) || 10, 10000);
+                numRecordsInput.max = regularMax;
+                numRecordsInput.value = Math.min(parseInt(numRecordsInput.value) || 10, regularMax);
                 recordsPerPageGroup.style.display = 'none';
                 updateFormLimits(); // This will restore the original help text
                 currentSession = null; // Clear session when disabling pagination
@@ -114,8 +117,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
         } else {
-            if (numRecordsValue < 10 || numRecordsValue > 1000000) {
-                showError('Number of records must be between 10 and 1,000,000 for pagination');
+            // Pagination validation using higher limits
+            const paginationMin = 10;
+            const paginationMax = limits.totalRecordsPagination ? limits.totalRecordsPagination.max : 100000000;
+            if (numRecordsValue < paginationMin || numRecordsValue > paginationMax) {
+                showError(`Number of records must be between ${paginationMin} and ${paginationMax.toLocaleString()} for pagination`);
                 return;
             }
         }
@@ -216,6 +222,25 @@ document.addEventListener('DOMContentLoaded', function() {
     async function generateData(formData) {
         const isLargeDataset = (formData.numRecords > 1000) || 
                               (formData.numFields * formData.numRecords > 5000);
+        const isVeryLargeDataset = formData.numRecords > 100000;
+        
+        // Show warning for very large datasets
+        if (isVeryLargeDataset) {
+            const confirmed = confirm(
+                `⚠️ Large Dataset Warning!\n\n` +
+                `You're requesting ${formData.numRecords.toLocaleString()} records.\n\n` +
+                `This may:\n` +
+                `• Take several minutes to generate\n` +
+                `• Use significant memory (${Math.ceil(formData.numRecords * formData.numFields * 25 / (1024 * 1024))}MB estimated)\n` +
+                `• Cause browser slowdown\n\n` +
+                `Consider using pagination for better performance.\n\n` +
+                `Continue anyway?`
+            );
+            
+            if (!confirmed) {
+                return; // User cancelled
+            }
+        }
         
         showLoading(isLargeDataset);
         
@@ -226,12 +251,28 @@ document.addEventListener('DOMContentLoaded', function() {
             // Simulate progress for large datasets
             progressInterval = setInterval(() => {
                 const elapsed = Date.now() - startTime;
-                const estimatedTotal = Math.max(2000, formData.numRecords * 2); // Rough estimate
+                // Better estimation for very large datasets
+                let estimatedTotal;
+                if (isVeryLargeDataset) {
+                    estimatedTotal = Math.max(10000, formData.numRecords * 0.5); // More conservative for 20M records
+                } else {
+                    estimatedTotal = Math.max(2000, formData.numRecords * 2); // Original estimate
+                }
+                
                 const progress = Math.min(90, (elapsed / estimatedTotal) * 100);
                 const remainingMs = (estimatedTotal - elapsed) * (100 - progress) / progress;
-                const estimate = remainingMs > 1000 ? `~${Math.ceil(remainingMs/1000)}s remaining` : 'Almost done...';
+                
+                let estimate;
+                if (remainingMs > 60000) {
+                    estimate = `~${Math.ceil(remainingMs/60000)} min remaining`;
+                } else if (remainingMs > 1000) {
+                    estimate = `~${Math.ceil(remainingMs/1000)}s remaining`;
+                } else {
+                    estimate = 'Almost done...';
+                }
+                
                 updateProgress(progress, estimate);
-            }, 200);
+            }, 500); // Update less frequently for very large datasets
         }
         
         try {
@@ -543,12 +584,23 @@ document.addEventListener('DOMContentLoaded', function() {
             return { isValid: false, error: 'Nested objects need at least 1 field each' };
         }
 
-        // Memory usage estimation
+        // Memory usage estimation (different for pagination vs regular)
         const estimatedTotalFields = formData.numFields + (formData.numObjects * formData.nestedFields * Math.pow(2, formData.numNesting));
-        const estimatedMemoryMB = (estimatedTotalFields * numRecordsValue * 50) / (1024 * 1024); // Rough estimate
+        const avgFieldSize = 25; // More realistic bytes per field
         
-        if (estimatedMemoryMB > 500) {
-            return { isValid: false, error: `Estimated memory usage too high (~${Math.round(estimatedMemoryMB)}MB). Please reduce complexity or use pagination.` };
+        if (enablePagination) {
+            // For pagination, only check memory per page (much more lenient)
+            const recordsPerPage = formData.recordsPerPage || 100;
+            const estimatedMemoryMB = (estimatedTotalFields * recordsPerPage * avgFieldSize) / (1024 * 1024);
+            if (estimatedMemoryMB > 500) { // Per page limit
+                return { isValid: false, error: `Estimated memory per page too high (~${Math.round(estimatedMemoryMB)}MB). Reduce fields or page size.` };
+            }
+        } else {
+            // For regular generation, check total memory
+            const estimatedMemoryMB = (estimatedTotalFields * numRecordsValue * avgFieldSize) / (1024 * 1024);
+            if (estimatedMemoryMB > 2000) { // Total memory limit
+                return { isValid: false, error: `Estimated memory usage too high (~${Math.round(estimatedMemoryMB)}MB). Please reduce complexity or use pagination.` };
+            }
         }
 
         return { isValid: true };
@@ -688,7 +740,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const baseUrl = window.location.origin || `${window.location.protocol}//${window.location.host}`;
         const endpoint = '/data';
         
-        // Prepare the request body for /data endpoint (non-paginated)
+        // Prepare the request body for /data endpoint (includes pagination params)
         const requestBody = {
             numFields: formData.numFields,
             numObjects: formData.numObjects,
@@ -698,6 +750,12 @@ document.addEventListener('DOMContentLoaded', function() {
             uniformFieldLength: formData.uniformFieldLength,
             storeIt: formData.storeIt
         };
+
+        // Add pagination parameters if enabled
+        if (formData.enablePagination) {
+            requestBody.enablePagination = true;
+            requestBody.recordsPerPage = formData.recordsPerPage;
+        }
 
         const curlCommand = `curl -X POST "${baseUrl}${endpoint}" \\
   -H "Content-Type: application/json" \\
