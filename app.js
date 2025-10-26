@@ -580,15 +580,14 @@ async function handlePaginatedRequest(req, res) {
             prevPageNumber
         };
 
-        // Add navigation URLs for GET requests
+        // Add navigation URLs for GET requests (relative URLs)
         if (req.method === 'GET') {
-            const baseUrl = `${req.protocol}://${req.get('host')}/data`;
             const baseParams = `enablePagination=true&sessionId=${finalSessionId}`;
             
             paginationResponse.nextUrl = hasNextPage ? 
-                `${baseUrl}?${baseParams}&pageNumber=${nextPageNumber}` : null;
+                `/data?${baseParams}&pageNumber=${nextPageNumber}` : null;
             paginationResponse.prevUrl = hasPreviousPage ? 
-                `${baseUrl}?${baseParams}&pageNumber=${prevPageNumber}` : null;
+                `/data?${baseParams}&pageNumber=${prevPageNumber}` : null;
         }
 
         res.json({
