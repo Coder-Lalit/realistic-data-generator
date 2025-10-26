@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const generateBtn = document.getElementById('generateBtn');
     const copyBtn = document.getElementById('copyBtn');
     const downloadBtn = document.getElementById('downloadBtn');
+    const copyCurlBtn = document.getElementById('copyCurlBtn');
     const loadingSection = document.getElementById('loadingSection');
     const resultSection = document.getElementById('resultSection');
     const errorSection = document.getElementById('errorSection');
@@ -187,6 +188,27 @@ document.addEventListener('DOMContentLoaded', function() {
             URL.revokeObjectURL(url);
             
             showTemporaryMessage(downloadBtn, '✅ Downloaded!', 2000);
+        }
+    });
+
+    // Copy cURL button handler
+    copyCurlBtn.addEventListener('click', function() {
+        const formData = getFormData();
+        const curlCommand = generateCurlCommand(formData);
+        
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(curlCommand).then(() => {
+                showTemporaryMessage(copyCurlBtn, '✅ cURL Copied!', 2000);
+            });
+        } else {
+            // Fallback for older browsers
+            const textArea = document.createElement('textarea');
+            textArea.value = curlCommand;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            showTemporaryMessage(copyCurlBtn, '✅ cURL Copied!', 2000);
         }
     });
 
@@ -405,6 +427,7 @@ document.addEventListener('DOMContentLoaded', function() {
         resultSection.style.display = 'block';
         copyBtn.style.display = 'flex';
         downloadBtn.style.display = 'flex';
+        copyCurlBtn.style.display = 'flex';
     }
 
     // Update pagination controls
@@ -579,6 +602,7 @@ document.addEventListener('DOMContentLoaded', function() {
         errorSection.style.display = 'none';
         copyBtn.style.display = 'none';
         downloadBtn.style.display = 'none';
+        copyCurlBtn.style.display = 'none';
         
         // Hide pagination controls
         const paginationControls = document.getElementById('paginationControls');
@@ -637,6 +661,49 @@ document.addEventListener('DOMContentLoaded', function() {
             button.innerHTML = originalContent;
             button.disabled = false;
         }, duration);
+    }
+
+    // Get form data helper function
+    function getFormData() {
+        const enablePagination = document.getElementById('enablePagination').checked;
+        const numRecordsValue = parseInt(document.getElementById('numRecords').value) || 0;
+        
+        return {
+            numFields: parseInt(document.getElementById('numFields').value) || 0,
+            numObjects: parseInt(document.getElementById('numObjects').value) || 0,
+            numNesting: parseInt(document.getElementById('numNesting').value) || 0,
+            numRecords: enablePagination ? null : numRecordsValue,
+            totalRecords: enablePagination ? numRecordsValue : null,
+            nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
+            uniformFieldLength: document.getElementById('uniformFieldLength').checked,
+            storeIt: document.getElementById('storeIt').checked,
+            recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
+            enablePagination: enablePagination
+        };
+    }
+
+    // Generate cURL command for /data endpoint
+    function generateCurlCommand(formData) {
+        // Dynamic base URL handling - adapts to any environment
+        const baseUrl = window.location.origin || `${window.location.protocol}//${window.location.host}`;
+        const endpoint = '/data';
+        
+        // Prepare the request body for /data endpoint (non-paginated)
+        const requestBody = {
+            numFields: formData.numFields,
+            numObjects: formData.numObjects,
+            numNesting: formData.numNesting,
+            numRecords: formData.enablePagination ? formData.totalRecords : formData.numRecords,
+            nestedFields: formData.nestedFields,
+            uniformFieldLength: formData.uniformFieldLength,
+            storeIt: formData.storeIt
+        };
+
+        const curlCommand = `curl -X POST "${baseUrl}${endpoint}" \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(requestBody, null, 2)}'`;
+
+        return curlCommand;
     }
 
     // Fetch configuration from server
