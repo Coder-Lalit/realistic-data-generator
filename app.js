@@ -217,18 +217,22 @@ function generateSessionId() {
 
 // Function to generate deterministic seed for pagination
 function generatePageSeed(sessionId, pageNumber) {
-    // Create a consistent seed based on session ID and page number
+    // Enhanced seed generation for better UUID uniqueness
     const sessionHash = sessionId.split('_').pop(); // Get the random part
+    const timestamp = sessionId.split('_')[1]; // Get timestamp part
     const pageHash = pageNumber.toString();
-    const combinedString = sessionHash + pageHash;
+    const combinedString = `${sessionHash}-${pageHash}-${timestamp}`;
     
-    // Simple hash function to convert string to number
+    // Enhanced hash function with more entropy
     let hash = 0;
     for (let i = 0; i < combinedString.length; i++) {
         const char = combinedString.charCodeAt(i);
         hash = ((hash << 5) - hash) + char;
         hash = hash & hash; // Convert to 32bit integer
     }
+    
+    // Add additional entropy based on page number using prime number for better distribution
+    hash = hash ^ (pageNumber * 7919); // Use prime number for better distribution
     
     return Math.abs(hash);
 }
@@ -371,7 +375,7 @@ app.get('/config', (req, res) => {
 // Function to handle paginated requests (shared by /data and /generate-paginated)
 async function handlePaginatedRequest(req, res) {
     try {
-        const { sessionId, pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength, recordsPerPage, storeIt } = req.body;
+        const { sessionId, pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength, recordsPerPage, storeIt, excludeEmoji } = req.body;
         // Determine if this is a new session or existing session navigation
         const isNewSession = !sessionId || sessionId === null || sessionId === "";
         const currentPageNumber = pageNumber || 1;
@@ -383,43 +387,43 @@ async function handlePaginatedRequest(req, res) {
         }
 
         // Set defaults if not provided
-        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
-        const finalRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : CONFIG.limits.recordsPerPage.default;
+        const finalNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
+        const finalNumObjects = numObjects !== undefined ? numObjects : 0;
+        const finalNumNesting = numNesting !== undefined ? numNesting : 0;
+        const finalTotalRecords = totalRecords !== undefined ? totalRecords : CONFIG.limits.numRecords.default;
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
+        const finalRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : 100;
+        const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-        // Validate input - for new sessions, all parameters are required
-        // For existing sessions, only sessionId and pageNumber are needed
+        // For existing sessions, only sessionId is needed - all other params use cached values
         const isExistingSession = sessionId && sessionId !== null && sessionId !== "";
         
-        if (!isExistingSession && (!numFields || numObjects === undefined || numNesting === undefined || !totalRecords)) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters: numFields, numObjects, numNesting, totalRecords' 
-            });
-        }
+        // No validation required for new sessions - all parameters now have defaults
 
         // Validate limits using configuration - only for new sessions
         if (!isExistingSession) {
             const limits = CONFIG.limits;
             
-            if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+            if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
                 return res.status(400).json({ 
                     error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
                 });
             }
 
-            if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+            if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
                 return res.status(400).json({ 
                     error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
                 });
             }
 
-            if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+            if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
                 return res.status(400).json({ 
                     error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
                 });
             }
 
-            if (totalRecords < limits.totalRecordsPagination.min || totalRecords > limits.totalRecordsPagination.max) {
+            if (finalTotalRecords < limits.totalRecordsPagination.min || finalTotalRecords > limits.totalRecordsPagination.max) {
                 return res.status(400).json({ 
                     error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination` 
                 });
@@ -493,21 +497,22 @@ async function handlePaginatedRequest(req, res) {
         if (isNewSession) {
             // Store configuration for new sessions
             sessionConfig = {
-                numFields,
-                numObjects,
-                numNesting,
-                totalRecords,
+                numFields: finalNumFields,
+                numObjects: finalNumObjects,
+                numNesting: finalNumNesting,
+                totalRecords: finalTotalRecords,
                 nestedFields: finalNestedFields,
                 uniformFieldLength: finalUniformLength,
-                recordsPerPage: finalRecordsPerPage
+                recordsPerPage: finalRecordsPerPage,
+                excludeEmoji: finalExcludeEmoji
             };
             
             effectivePageSize = finalRecordsPerPage;
-            effectiveTotalRecords = totalRecords;
+            effectiveTotalRecords = finalTotalRecords;
             
             // Generate field length map if uniform length is requested
             if (finalUniformLength) {
-                fieldLengthMap = generateFieldLengthMapFromSample(numFields, numObjects, numNesting, finalNestedFields);
+                fieldLengthMap = generateFieldLengthMapFromSample(finalNumFields, finalNumObjects, finalNumNesting, finalNestedFields);
             }
             
             // Store in cache for new sessions
@@ -521,7 +526,8 @@ async function handlePaginatedRequest(req, res) {
                 totalRecords: cachedData.config.totalRecords,
                 nestedFields: cachedData.config.nestedFields,
                 uniformFieldLength: cachedData.config.uniformFieldLength,
-                recordsPerPage: cachedData.config.recordsPerPage
+                recordsPerPage: cachedData.config.recordsPerPage,
+                excludeEmoji: cachedData.config.excludeEmoji
             };
             
             effectivePageSize = cachedData.config.recordsPerPage;
@@ -556,7 +562,8 @@ async function handlePaginatedRequest(req, res) {
             recordsToGenerate, 
             sessionConfig.nestedFields, 
             sessionConfig.uniformFieldLength, 
-            seed
+            seed,
+            sessionConfig.excludeEmoji
         );
         
         // Calculate pagination info
@@ -616,7 +623,8 @@ app.get('/data', async (req, res) => {
             enablePagination,
             recordsPerPage,
             sessionId,
-            pageNumber
+            pageNumber,
+            excludeEmoji
         } = req.query;
 
         // Convert string parameters to appropriate types
@@ -631,7 +639,8 @@ app.get('/data', async (req, res) => {
             enablePagination: enablePagination === 'true',
             recordsPerPage: recordsPerPage ? parseInt(recordsPerPage) : undefined,
             sessionId: sessionId || undefined,
-            pageNumber: pageNumber ? parseInt(pageNumber) : undefined
+            pageNumber: pageNumber ? parseInt(pageNumber) : undefined,
+            excludeEmoji: excludeEmoji === 'true'
         };
 
         // Create a mock request object with the parsed parameters in the body
@@ -648,17 +657,28 @@ app.get('/data', async (req, res) => {
         if (parsedParams.enablePagination) {
             logger.info(`GET Data request (pagination): ${parsedParams.numRecords || 'existing session'} total records, ${parsedParams.numFields || 'cached'} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`);
             
+            // Set defaults for pagination parameters
+            const finalPaginationNumFields = parsedParams.numFields !== undefined ? parsedParams.numFields : CONFIG.limits.numFields.default;
+            const finalPaginationNumObjects = parsedParams.numObjects !== undefined ? parsedParams.numObjects : 0;
+            const finalPaginationNumNesting = parsedParams.numNesting !== undefined ? parsedParams.numNesting : 0;
+            const finalPaginationNumRecords = parsedParams.numRecords !== undefined ? parsedParams.numRecords : CONFIG.limits.numRecords.default;
+            const finalPaginationNestedFields = parsedParams.nestedFields !== undefined ? parsedParams.nestedFields : 0;
+            const finalPaginationUniformLength = parsedParams.uniformFieldLength !== undefined ? parsedParams.uniformFieldLength : false;
+            const finalPaginationRecordsPerPage = parsedParams.recordsPerPage !== undefined ? parsedParams.recordsPerPage : 100;
+            const finalPaginationExcludeEmoji = parsedParams.excludeEmoji !== undefined ? parsedParams.excludeEmoji : false;
+            
             // Transform request to pagination format
             const paginationRequest = {
-                numFields: parsedParams.numFields,
-                numObjects: parsedParams.numObjects,
-                numNesting: parsedParams.numNesting,
-                totalRecords: parsedParams.numRecords,
-                nestedFields: parsedParams.nestedFields,
-                uniformFieldLength: parsedParams.uniformFieldLength,
-                recordsPerPage: parsedParams.recordsPerPage,
+                numFields: finalPaginationNumFields,
+                numObjects: finalPaginationNumObjects,
+                numNesting: finalPaginationNumNesting,
+                totalRecords: finalPaginationNumRecords,
+                nestedFields: finalPaginationNestedFields,
+                uniformFieldLength: finalPaginationUniformLength,
+                recordsPerPage: finalPaginationRecordsPerPage,
                 pageNumber: parsedParams.pageNumber || 1,
-                sessionId: parsedParams.sessionId
+                sessionId: parsedParams.sessionId,
+                excludeEmoji: finalPaginationExcludeEmoji
             };
             
             // Call the pagination logic directly
@@ -669,42 +689,42 @@ app.get('/data', async (req, res) => {
         logger.info(`GET Data request: ${parsedParams.numRecords} records, ${parsedParams.numFields} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`);
 
         // Set defaults if not provided
-        const finalNestedFields = parsedParams.nestedFields !== undefined ? parsedParams.nestedFields : CONFIG.limits.nestedFields.default;
-        const finalUniformLength = parsedParams.uniformFieldLength !== undefined ? parsedParams.uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalNumFields = parsedParams.numFields !== undefined ? parsedParams.numFields : CONFIG.limits.numFields.default;
+        const finalNumObjects = parsedParams.numObjects !== undefined ? parsedParams.numObjects : 0;
+        const finalNumNesting = parsedParams.numNesting !== undefined ? parsedParams.numNesting : 0;
+        const finalNumRecords = parsedParams.numRecords !== undefined ? parsedParams.numRecords : CONFIG.limits.numRecords.default;
+        const finalNestedFields = parsedParams.nestedFields !== undefined ? parsedParams.nestedFields : 0;
+        const finalUniformLength = parsedParams.uniformFieldLength !== undefined ? parsedParams.uniformFieldLength : false;
         const finalStoreIt = parsedParams.storeIt !== undefined ? parsedParams.storeIt : false;
+        const finalExcludeEmoji = parsedParams.excludeEmoji !== undefined ? parsedParams.excludeEmoji : false;
 
-        // Validate input
-        if (!parsedParams.numFields || parsedParams.numObjects === undefined || parsedParams.numNesting === undefined || !parsedParams.numRecords) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
-            });
-        }
+        // No validation required - all parameters now have defaults
 
         const limits = CONFIG.limits;
 
         // Validate numFields
-        if (parsedParams.numFields < limits.numFields.min || parsedParams.numFields > limits.numFields.max) {
+        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
             return res.status(400).json({ 
                 error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
             });
         }
 
         // Validate numObjects
-        if (parsedParams.numObjects < limits.numObjects.min || parsedParams.numObjects > limits.numObjects.max) {
+        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
             return res.status(400).json({ 
                 error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
             });
         }
 
         // Validate numNesting
-        if (parsedParams.numNesting < limits.numNesting.min || parsedParams.numNesting > limits.numNesting.max) {
+        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
             return res.status(400).json({ 
                 error: `Nesting level must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
             });
         }
 
         // Validate numRecords
-        if (parsedParams.numRecords < limits.numRecords.min || parsedParams.numRecords > limits.numRecords.max) {
+        if (finalNumRecords < limits.numRecords.min || finalNumRecords > limits.numRecords.max) {
             return res.status(400).json({ 
                 error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
             });
@@ -718,22 +738,24 @@ app.get('/data', async (req, res) => {
         }
 
         // Performance warnings for large datasets
-        if (parsedParams.numRecords > 100000) {
-            logger.warn(`Large dataset requested: ${parsedParams.numRecords} records. Consider using pagination for better performance.`);
+        if (finalNumRecords > 100000) {
+            logger.warn(`Large dataset requested: ${finalNumRecords} records. Consider using pagination for better performance.`);
         }
-        const estimatedMemoryMB = Math.ceil((parsedParams.numRecords * parsedParams.numFields * 50) / (1024 * 1024));
+        const estimatedMemoryMB = Math.ceil((finalNumRecords * finalNumFields * 50) / (1024 * 1024));
         if (estimatedMemoryMB > 500) {
             logger.warn(`Estimated memory usage: ~${estimatedMemoryMB}MB. Monitor server resources.`);
         }
 
         // Generate data
         const data = generateRealisticData(
-            parsedParams.numFields, 
-            parsedParams.numObjects, 
-            parsedParams.numNesting, 
-            parsedParams.numRecords, 
+            finalNumFields, 
+            finalNumObjects, 
+            finalNumNesting, 
+            finalNumRecords, 
             finalNestedFields, 
-            finalUniformLength
+            finalUniformLength,
+            null, // seed
+            finalExcludeEmoji
         );
 
         // Store in MongoDB if requested
@@ -758,22 +780,33 @@ app.get('/data', async (req, res) => {
 // POST endpoint for /data - returns just the data array (same as /generate-data but only returns data)
 app.post('/data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage, excludeEmoji } = req.body;
         
         // If pagination is enabled, redirect to pagination logic
         if (enablePagination) {
             logger.info(`Data request (pagination): ${numRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`);
             
             // Transform request to pagination format and call pagination endpoint internally
+            // Set defaults for pagination parameters
+            const finalPaginationNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
+            const finalPaginationNumObjects = numObjects !== undefined ? numObjects : 0;
+            const finalPaginationNumNesting = numNesting !== undefined ? numNesting : 0;
+            const finalPaginationNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
+            const finalPaginationNestedFields = nestedFields !== undefined ? nestedFields : 0;
+            const finalPaginationUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
+            const finalPaginationRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : 100;
+            const finalPaginationExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
+            
             const paginationRequest = {
-                numFields,
-                numObjects,
-                numNesting,
-                totalRecords: numRecords,
-                nestedFields,
-                uniformFieldLength,
-                recordsPerPage: recordsPerPage || 100,
-                pageNumber: 1 // Default to first page
+                numFields: finalPaginationNumFields,
+                numObjects: finalPaginationNumObjects,
+                numNesting: finalPaginationNumNesting,
+                totalRecords: finalPaginationNumRecords,
+                nestedFields: finalPaginationNestedFields,
+                uniformFieldLength: finalPaginationUniformLength,
+                recordsPerPage: finalPaginationRecordsPerPage,
+                pageNumber: 1, // Default to first page
+                excludeEmoji: finalPaginationExcludeEmoji
             };
             
             // Call the pagination logic directly
@@ -781,45 +814,45 @@ app.post('/data', async (req, res) => {
             return await handlePaginatedRequest(req, res);
         }
         
-        logger.info(`Data request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`);
-
         // Set defaults if not provided
-        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
+        const finalNumObjects = numObjects !== undefined ? numObjects : 0;
+        const finalNumNesting = numNesting !== undefined ? numNesting : 0;
+        const finalNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
         const finalStoreIt = storeIt !== undefined ? storeIt : false;
+        const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-        // Validate input
-        if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
-            });
-        }
+        logger.info(`Data request: ${finalNumRecords} records, ${finalNumFields} fields, uniform: ${!!finalUniformLength}, store: ${!!finalStoreIt}`);
+
+        // No validation required - all parameters now have defaults
 
         const limits = CONFIG.limits;
 
         // Validate numFields
-        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
             return res.status(400).json({ 
                 error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
             });
         }
 
         // Validate numObjects
-        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
             return res.status(400).json({ 
                 error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
             });
         }
 
         // Validate numNesting
-        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
             return res.status(400).json({ 
                 error: `Nesting level must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
             });
         }
 
         // Validate numRecords
-        if (numRecords < limits.numRecords.min || numRecords > limits.numRecords.max) {
+        if (finalNumRecords < limits.numRecords.min || finalNumRecords > limits.numRecords.max) {
             return res.status(400).json({ 
                 error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
             });
@@ -833,19 +866,19 @@ app.post('/data', async (req, res) => {
         }
 
         // Performance warning for very large datasets
-        if (numRecords > 100000) {
-            logger.warn(`Large dataset requested: ${numRecords} records. Consider using pagination for better performance.`);
+        if (finalNumRecords > 100000) {
+            logger.warn(`Large dataset requested: ${finalNumRecords} records. Consider using pagination for better performance.`);
         }
         
         // Memory usage estimation (more realistic calculation)
         const avgFieldSize = 25; // Average bytes per field (JSON + field name + value)
-        const estimatedMemoryMB = Math.ceil((numRecords * numFields * avgFieldSize) / (1024 * 1024));
+        const estimatedMemoryMB = Math.ceil((finalNumRecords * finalNumFields * avgFieldSize) / (1024 * 1024));
         if (estimatedMemoryMB > 1000) { // Increased threshold to 1GB
             logger.warn(`Estimated memory usage: ~${estimatedMemoryMB}MB. Monitor server resources.`);
         }
 
         // Generate data
-        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
+        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, null, finalExcludeEmoji);
 
         // Store to MongoDB if requested
         if (finalStoreIt) {
@@ -875,43 +908,42 @@ app.post('/data', async (req, res) => {
 // Data generation endpoint
 app.post('/generate-data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt } = req.body;
-        logger.info(`Data generation request: ${numRecords} records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`);
-
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, excludeEmoji } = req.body;
+        
         // Set defaults if not provided
-        const finalNestedFields = nestedFields !== undefined ? nestedFields : CONFIG.limits.nestedFields.default;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : CONFIG.limits.uniformFieldLength.default;
+        const finalNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
+        const finalNumObjects = numObjects !== undefined ? numObjects : 0;
+        const finalNumNesting = numNesting !== undefined ? numNesting : 0;
+        const finalNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
+        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
         const finalStoreIt = storeIt !== undefined ? storeIt : false;
+        const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-        // Validate input
-        if (!numFields || numObjects === undefined || numNesting === undefined || !numRecords) {
-            return res.status(400).json({ 
-                error: 'Missing required parameters: numFields, numObjects, numNesting, numRecords' 
-            });
-        }
+        logger.info(`Data generation request: ${finalNumRecords} records, ${finalNumFields} fields, uniform: ${!!finalUniformLength}, store: ${!!finalStoreIt}`);
 
         // Validate limits using configuration
         const limits = CONFIG.limits;
         
-        if (numFields < limits.numFields.min || numFields > limits.numFields.max) {
+        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
             return res.status(400).json({ 
                 error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
             });
         }
 
-        if (numObjects < limits.numObjects.min || numObjects > limits.numObjects.max) {
+        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
             return res.status(400).json({ 
                 error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
             });
         }
 
-        if (numNesting < limits.numNesting.min || numNesting > limits.numNesting.max) {
+        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
             return res.status(400).json({ 
                 error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
             });
         }
 
-        if (numRecords < limits.numRecords.min || numRecords > limits.numRecords.max) {
+        if (finalNumRecords < limits.numRecords.min || finalNumRecords > limits.numRecords.max) {
             return res.status(400).json({ 
                 error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}` 
             });
@@ -926,30 +958,31 @@ app.post('/generate-data', async (req, res) => {
         // Performance validation removed - no limits on total fields
         
         // Performance warning for very large datasets
-        if (numRecords > 100000) {
-            logger.warn(`Large dataset requested: ${numRecords} records. Consider using pagination for better performance.`);
+        if (finalNumRecords > 100000) {
+            logger.warn(`Large dataset requested: ${finalNumRecords} records. Consider using pagination for better performance.`);
         }
         
         // Memory usage estimation (more realistic calculation)
         const avgFieldSize = 25; // Average bytes per field (JSON + field name + value)
-        const estimatedMemoryMB = Math.ceil((numRecords * numFields * avgFieldSize) / (1024 * 1024));
+        const estimatedMemoryMB = Math.ceil((finalNumRecords * finalNumFields * avgFieldSize) / (1024 * 1024));
         if (estimatedMemoryMB > 1000) { // Increased threshold to 1GB
             logger.warn(`Estimated memory usage: ~${estimatedMemoryMB}MB. Monitor server resources.`);
         }
 
-        const data = generateRealisticData(numFields, numObjects, numNesting, numRecords, finalNestedFields, finalUniformLength);
+        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, null, finalExcludeEmoji);
         
         // Store to MongoDB if requested
         if (finalStoreIt) {
             const sessionId = `generate_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             const requestParams = {
-                numFields,
-                numObjects,
-                numNesting,
-                numRecords,
+                numFields: finalNumFields,
+                numObjects: finalNumObjects,
+                numNesting: finalNumNesting,
+                numRecords: finalNumRecords,
                 nestedFields: finalNestedFields,
                 uniformFieldLength: finalUniformLength,
-                storeIt: finalStoreIt
+                storeIt: finalStoreIt,
+                excludeEmoji: finalExcludeEmoji
             };
             
             await storeDataToMongoDB(sessionId, requestParams, data);
@@ -967,7 +1000,7 @@ app.post('/generate-paginated', async (req, res) => {
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, seed = null) {
+function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, seed = null, excludeEmoji = false) {
     const records = [];
 
     // Handle schema generation based on useUniformLength flag
@@ -993,11 +1026,12 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
     for (let i = 0; i < numRecords; i++) {
         // For pagination, create a unique seed for each record based on base seed + index
         if (seed !== null) {
-            // Create deterministic seed for this specific record
-            faker.seed(seed + (i * 1000)); // Multiply by 1000 to ensure distinct seeds
+            // Enhanced deterministic seed for this specific record using prime numbers for better distribution
+            const recordSeed = seed + (i * 10007) + (seed % 1000 * 100000); // Use prime number and add seed-based offset
+            faker.seed(recordSeed);
         }
         
-        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength);
+        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength, excludeEmoji);
         records.push(record);
     }
 
@@ -1005,13 +1039,19 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
 }
 
 // Function to generate a single object with specified parameters
-function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, useUniformLength = false) {
+function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, useUniformLength = false, excludeEmoji = false) {
     const obj = {};
 
     // Generate basic fields using the global FIELD_TYPES array for consistent ordering
     for (let i = 0; i < numFields; i++) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
+        
+        // Skip emoji-containing fields if excludeEmoji is true
+        if (excludeEmoji && isEmojiField(fieldType)) {
+            continue;
+        }
+        
         const rawValue = generateFieldValue(fieldType);
         obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, fieldType, useUniformLength);
     }
@@ -1022,10 +1062,10 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, u
             const objectName = `nested_object_${i + 1}`;
             if (nestingLevel > 1) {
                 // Recursive nesting with same number of objects at each level
-                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields, useUniformLength);
+                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields, useUniformLength, excludeEmoji);
             } else {
                 // Last level: simple object with configurable number of fields
-                obj[objectName] = generateSimpleObject(nestedFields, useUniformLength);
+                obj[objectName] = generateSimpleObject(nestedFields, useUniformLength, excludeEmoji);
             }
         }
     }
@@ -1034,18 +1074,30 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, u
 }
 
 // Function to generate a simple object (no nesting)
-function generateSimpleObject(numFields = 4, useUniformLength = false) {
+function generateSimpleObject(numFields = 4, useUniformLength = false, excludeEmoji = false) {
     const obj = {};
 
     // Use the same global FIELD_TYPES array for consistent ordering
     for (let i = 0; i < numFields; i++) {
         const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
         const fieldName = `${fieldType}_${i + 1}`;
+        
+        // Skip emoji-containing fields if excludeEmoji is true
+        if (excludeEmoji && isEmojiField(fieldType)) {
+            continue;
+        }
+        
         const rawValue = generateFieldValue(fieldType);
         obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, fieldType, useUniformLength);
     }
 
     return obj;
+}
+
+// Function to check if a field type is known to contain emojis
+function isEmojiField(fieldType) {
+    const emojiFields = ['bio', 'emoji'];
+    return emojiFields.includes(fieldType);
 }
 
 // Function to detect if text contains emoji characters
