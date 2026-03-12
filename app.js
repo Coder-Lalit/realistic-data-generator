@@ -121,7 +121,7 @@ const CONFIG = {
     limits: {
         numFields: {
             min: 1,
-            max: 300,
+            max: 100000,
             default: 5
         },
         numObjects: {
@@ -345,6 +345,7 @@ app.get('/ping', (req, res) => {
     const status = {
         success: true,
         message: 'pong',
+        note: 'remove upperlimit',
         status: 'healthy',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),

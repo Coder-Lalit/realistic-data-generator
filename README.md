@@ -54,7 +54,7 @@ npm run dev
 ### Web Interface
 
 1. **Set Parameters**:
-   - **Number of Fields** (1-300): Basic data fields like names, emails, addresses
+   - **Number of Fields** (1+): Basic data fields like names, emails, addresses
    - **Number of Nested Objects** (0-10): Objects nested within each record
    - **Fields per Nested Object** (0-50): Number of fields in each nested object
    - **Nesting Depth** (0-5): How deep the nesting structure goes
@@ -566,7 +566,7 @@ nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 → imei_86 
 - **CORS**: Enabled for cross-origin requests
 
 ### Validation Limits
-- Fields: 1-300
+- Fields: 1+ (no upper limit)
 - Nested Objects: 0-10
 - Fields per Nested Object: 0-50
 - Nesting Depth: 0-5

@@ -778,7 +778,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Use fallback configuration
                 config = {
                     limits: {
-                        numFields: { min: 1, max: 300, default: 5 },
+                        numFields: { min: 1, max: 100000, default: 5 },
                         numObjects: { min: 0, max: 10, default: 1 },
                         numNesting: { min: 0, max: 5, default: 1 },
                         numRecords: { min: 1, max: 10000, default: 10 },
@@ -791,7 +791,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Use fallback configuration
             config = {
                 limits: {
-                    numFields: { min: 1, max: 300, default: 5 },
+                    numFields: { min: 1, max: 100000, default: 5 },
                     numObjects: { min: 0, max: 10, default: 1 },
                     numNesting: { min: 0, max: 5, default: 1 },
                     numRecords: { min: 1, max: 10000, default: 10 },
