@@ -564,7 +564,8 @@ async function handlePaginatedRequest(req, res) {
             sessionConfig.nestedFields, 
             sessionConfig.uniformFieldLength, 
             seed,
-            sessionConfig.excludeEmoji
+            sessionConfig.excludeEmoji,
+            startIndex  // Global record offset - ensures unique UUIDs across all batches
         );
         
         // Calculate pagination info
@@ -1001,7 +1002,7 @@ app.post('/generate-paginated', async (req, res) => {
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, seed = null, excludeEmoji = false) {
+function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, seed = null, excludeEmoji = false, startIndex = 0) {
     const records = [];
 
     // Handle schema generation based on useUniformLength flag
@@ -1025,10 +1026,11 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
     }
 
     for (let i = 0; i < numRecords; i++) {
-        // For pagination, create a unique seed for each record based on base seed + index
+        // For pagination, create a unique seed for each record based on GLOBAL index (not page-relative)
+        // Using global index prevents UUID duplication when page seeds collide (32-bit hash) across batches
         if (seed !== null) {
-            // Enhanced deterministic seed for this specific record using prime numbers for better distribution
-            const recordSeed = seed + (i * 10007) + (seed % 1000 * 100000); // Use prime number and add seed-based offset
+            const globalRecordIndex = startIndex + i;
+            const recordSeed = seed + (globalRecordIndex * 10007) + (seed % 1000 * 100000);
             faker.seed(recordSeed);
         }
         
