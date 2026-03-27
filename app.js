@@ -338,6 +338,20 @@ function generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, n
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Log any response status other than 200 (3xx cache/redirect, 4xx client, 5xx server, etc.)
+app.use((req, res, next) => {
+    res.on('finish', () => {
+        const code = res.statusCode;
+        if (code === 200) return;
+        const line = `${code} ${req.method} ${req.originalUrl || req.url}`;
+        if (code >= 500) logger.error(line);
+        else if (code >= 400) logger.warn(line);
+        else logger.info(line);
+    });
+    next();
+});
+
 app.use(express.static('public'));
 
 // Health check endpoint for keep-alive and monitoring
