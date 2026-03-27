@@ -1019,19 +1019,25 @@ function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, 
         logger.debug(`Generating natural data without any schema or length processing`);
     }
 
-    // Set seed for deterministic generation (pagination consistency)
-    if (seed !== null) {
-        faker.seed(seed);
-        logger.debug(`Using deterministic seed: ${seed} for consistent data generation`);
-    }
-
     for (let i = 0; i < numRecords; i++) {
-        // For pagination, create a unique seed for each record based on GLOBAL index (not page-relative)
-        // Using global index prevents UUID duplication when page seeds collide (32-bit hash) across batches
+        // For pagination, seed each record from page seed + GLOBAL index. A single numeric seed was
+        // unsafe: (1) JS Number loses precision once globalRecordIndex * 10007 grows past ~2^53,
+        // collapsing different rows to the same seed; (2) faker's numeric seed uses 32 bits only.
+        // BigInt mix + array seed (initByArray) fixes both.
         if (seed !== null) {
             const globalRecordIndex = startIndex + i;
-            const recordSeed = seed + (globalRecordIndex * 10007) + (seed % 1000 * 100000);
-            faker.seed(recordSeed);
+            const g = BigInt(globalRecordIndex);
+            const s = BigInt(seed);
+            const mix = s + g * 10007n + (s % 1000n) * 100000n;
+            faker.seed([
+                Number(mix & 0xffffffffn),
+                Number((mix >> 32n) & 0xffffffffn),
+                Number((mix >> 64n) & 0xffffffffn),
+                seed >>> 0
+            ]);
+            logger.debug(
+                `Deterministic faker seed (page + global index ${globalRecordIndex}) for pagination`
+            );
         }
         
         const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength, excludeEmoji);
