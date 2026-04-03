@@ -58,6 +58,10 @@ const connectToMongoDB = async () => {
         if (process.env.MONGODB_URI) {
             await mongoose.connect(process.env.MONGODB_URI);
             logger.info('Connected to MongoDB successfully');
+            const ucb = (process.env.USE_COPY_BACKING_STORE || 'auto').toLowerCase();
+            if (ucb !== 'memory') {
+                logger.info('useCopy sessions/pages will use MongoDB when USE_COPY_BACKING_STORE is auto or mongo (multi-instance safe)');
+            }
         } else {
             logger.warn('MONGODB_URI not found in environment variables - MongoDB storage disabled');
         }
@@ -97,6 +101,27 @@ const GeneratedDataSchema = new mongoose.Schema({
 });
 
 const GeneratedData = mongoose.model('GeneratedData', GeneratedDataSchema);
+
+/** useCopy shared across instances (Render replicas, cluster): session + page snapshots in Mongo. */
+const UseCopySessionSchema = new mongoose.Schema({
+    sessionId: { type: String, required: true, unique: true },
+    config: { type: mongoose.Schema.Types.Mixed, required: true },
+    fieldLengthMap: { type: mongoose.Schema.Types.Mixed, default: null },
+    expiresAt: { type: Date, required: true }
+});
+UseCopySessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const UseCopyPageSchema = new mongoose.Schema({
+    sessionId: { type: String, required: true },
+    pageNumber: { type: Number, required: true },
+    snapshot: { type: mongoose.Schema.Types.Mixed, required: true },
+    expiresAt: { type: Date, required: true }
+});
+UseCopyPageSchema.index({ sessionId: 1, pageNumber: 1 }, { unique: true });
+UseCopyPageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const UseCopySession = mongoose.model('UseCopySession', UseCopySessionSchema);
+const UseCopyPage = mongoose.model('UseCopyPage', UseCopyPageSchema);
 
 // Function to store data to MongoDB
 async function storeDataToMongoDB(sessionId, requestParams, data) {
@@ -258,14 +283,22 @@ function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
 }
 
 // --- useCopy: session cache (TTL) — full generate once per page, then clone + fresh uuid_1 ----------
+// memory: single process. mongo: shared across instances when MONGODB_URI is connected (USE_COPY_BACKING_STORE=auto|mongo).
 const USE_COPY_TTL_MS = 10 * 60 * 1000;
 const USE_COPY_SESSION_CACHE = new Map();
+
+function useCopyUsesMongoStore() {
+    const mode = (process.env.USE_COPY_BACKING_STORE || 'auto').toLowerCase();
+    if (mode === 'memory') return false;
+    if (mode === 'mongo') return mongoose.connection.readyState === 1;
+    return mongoose.connection.readyState === 1;
+}
 
 function generateUseCopySessionId() {
     return `ucopy_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 }
 
-function cleanExpiredUseCopySessions() {
+function cleanExpiredUseCopySessionsMemory() {
     const now = Date.now();
     for (const [id, entry] of USE_COPY_SESSION_CACHE.entries()) {
         if (now > entry.expiresAt) {
@@ -275,8 +308,8 @@ function cleanExpiredUseCopySessions() {
     }
 }
 
-function storeUseCopySession(sessionId, config, fieldLengthMap) {
-    cleanExpiredUseCopySessions();
+function storeUseCopySessionMemory(sessionId, config, fieldLengthMap) {
+    cleanExpiredUseCopySessionsMemory();
     USE_COPY_SESSION_CACHE.set(sessionId, {
         config,
         fieldLengthMap,
@@ -286,7 +319,7 @@ function storeUseCopySession(sessionId, config, fieldLengthMap) {
     logger.info(`useCopy session stored: ${sessionId.slice(-12)} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
 }
 
-function getUseCopySession(sessionId) {
+function getUseCopySessionMemory(sessionId) {
     const entry = USE_COPY_SESSION_CACHE.get(sessionId);
     if (!entry) {
         return null;
@@ -299,6 +332,78 @@ function getUseCopySession(sessionId) {
     entry.expiresAt = Date.now() + USE_COPY_TTL_MS;
     USE_COPY_SESSION_CACHE.set(sessionId, entry);
     return entry;
+}
+
+async function storeUseCopySessionMongo(sessionId, config, fieldLengthMap) {
+    if (mongoose.connection.readyState !== 1) {
+        throw new Error('MongoDB not connected; set MONGODB_URI or USE_COPY_BACKING_STORE=memory');
+    }
+    const expiresAt = new Date(Date.now() + USE_COPY_TTL_MS);
+    await UseCopySession.create({
+        sessionId,
+        config,
+        fieldLengthMap: fieldLengthMap ?? null,
+        expiresAt
+    });
+    logger.info(`useCopy session stored (Mongo): ${sessionId.slice(-12)} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
+}
+
+async function getUseCopySessionMongo(sessionId) {
+    const now = new Date();
+    const doc = await UseCopySession.findOneAndUpdate(
+        { sessionId, expiresAt: { $gt: now } },
+        { $set: { expiresAt: new Date(Date.now() + USE_COPY_TTL_MS) } },
+        { new: true }
+    ).lean();
+    if (!doc) return null;
+    return {
+        config: doc.config,
+        fieldLengthMap: doc.fieldLengthMap,
+        expiresAt: new Date(doc.expiresAt).getTime(),
+        storage: 'mongo'
+    };
+}
+
+async function findUseCopyPageMongo(sessionId, pageNumber) {
+    const now = new Date();
+    const doc = await UseCopyPage.findOneAndUpdate(
+        { sessionId, pageNumber, expiresAt: { $gt: now } },
+        { $set: { expiresAt: new Date(Date.now() + USE_COPY_TTL_MS) } },
+        { new: true }
+    ).lean();
+    return doc ? doc.snapshot : null;
+}
+
+async function saveUseCopyPageMongo(sessionId, pageNumber, snapshot) {
+    const expiresAt = new Date(Date.now() + USE_COPY_TTL_MS);
+    try {
+        await UseCopyPage.create({ sessionId, pageNumber, snapshot, expiresAt });
+    } catch (err) {
+        if (err && err.code === 11000) return;
+        throw err;
+    }
+}
+
+async function updateUseCopySessionFieldMapMongo(sessionId, map) {
+    await UseCopySession.updateOne(
+        { sessionId },
+        { $set: { fieldLengthMap: map, expiresAt: new Date(Date.now() + USE_COPY_TTL_MS) } }
+    );
+}
+
+async function storeUseCopySession(sessionId, config, fieldLengthMap) {
+    if (useCopyUsesMongoStore()) {
+        await storeUseCopySessionMongo(sessionId, config, fieldLengthMap);
+        return;
+    }
+    storeUseCopySessionMemory(sessionId, config, fieldLengthMap);
+}
+
+async function getUseCopySession(sessionId) {
+    if (useCopyUsesMongoStore()) {
+        return await getUseCopySessionMongo(sessionId);
+    }
+    return getUseCopySessionMemory(sessionId);
 }
 
 /** Deep clone rows and assign new top-level uuid_1 */
@@ -397,7 +502,15 @@ app.use((req, res, next) => {
 app.use(express.static('public'));
 
 // Health check endpoint for keep-alive and monitoring
-app.get('/ping', (req, res) => {
+app.get('/ping', async (req, res) => {
+    let activeSessions = USE_COPY_SESSION_CACHE.size;
+    if (useCopyUsesMongoStore()) {
+        try {
+            activeSessions = await UseCopySession.countDocuments({ expiresAt: { $gt: new Date() } });
+        } catch {
+            activeSessions = USE_COPY_SESSION_CACHE.size;
+        }
+    }
     const status = {
         success: true,
         message: 'pong',
@@ -408,9 +521,10 @@ app.get('/ping', (req, res) => {
         memory: process.memoryUsage(),
         version: '1.0.0',
         environment: process.env.NODE_ENV || 'development',
-        activeSessions: USE_COPY_SESSION_CACHE.size
+        useCopyStore: useCopyUsesMongoStore() ? 'mongo' : 'memory',
+        activeSessions
     };
-    
+
     logger.debug('Ping request received');
     res.json(status);
 });
@@ -441,7 +555,7 @@ async function handlePaginatedRequest(req, res) {
 
         let useCopy = useCopyFlag;
         if (!useCopy && existingUseCopySessionId) {
-            const cached = USE_COPY_SESSION_CACHE.get(existingUseCopySessionId);
+            const cached = await getUseCopySession(existingUseCopySessionId);
             if (cached && Date.now() <= cached.expiresAt) {
                 useCopy = true;
             }
@@ -661,10 +775,10 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         };
 
         finalSessionId = generateUseCopySessionId();
-        storeUseCopySession(finalSessionId, sessionConfig, null);
-        entry = getUseCopySession(finalSessionId);
+        await storeUseCopySession(finalSessionId, sessionConfig, null);
+        entry = await getUseCopySession(finalSessionId);
     } else {
-        entry = getUseCopySession(existingSessionId);
+        entry = await getUseCopySession(existingSessionId);
         if (!entry) {
             return res.status(404).json({
                 error: 'useCopy session not found or expired. Start again with useCopy=true and no sessionId.'
@@ -689,7 +803,32 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
     const recordsToGenerate = endIndex - startIndex;
 
     let data;
-    if (entry.responseCopyByPage.has(currentPageNumber)) {
+    const mongoStore = useCopyUsesMongoStore();
+    if (mongoStore) {
+        const pageSnapshot = await findUseCopyPageMongo(finalSessionId, currentPageNumber);
+        if (pageSnapshot != null) {
+            data = applyFreshUuid1FromSnapshot(pageSnapshot);
+        } else {
+            const prebuiltMap =
+                entry.fieldLengthMap && Object.keys(entry.fieldLengthMap).length > 0 ? entry.fieldLengthMap : null;
+            data = generateRealisticData(
+                sessionConfig.numFields,
+                sessionConfig.numObjects,
+                sessionConfig.numNesting,
+                recordsToGenerate,
+                sessionConfig.nestedFields,
+                sessionConfig.uniformFieldLength,
+                sessionConfig.excludeEmoji,
+                prebuiltMap
+            );
+            if (sessionConfig.uniformFieldLength && !entry.fieldLengthMap && FIELD_LENGTH_MAP) {
+                const mapCopy = { ...FIELD_LENGTH_MAP };
+                await updateUseCopySessionFieldMapMongo(finalSessionId, mapCopy);
+                entry.fieldLengthMap = mapCopy;
+            }
+            await saveUseCopyPageMongo(finalSessionId, currentPageNumber, structuredClone(data));
+        }
+    } else if (entry.responseCopyByPage && entry.responseCopyByPage.has(currentPageNumber)) {
         data = applyFreshUuid1FromSnapshot(entry.responseCopyByPage.get(currentPageNumber));
     } else {
         const prebuiltMap = entry.fieldLengthMap || null;
@@ -705,6 +844,9 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         );
         if (sessionConfig.uniformFieldLength && !entry.fieldLengthMap && FIELD_LENGTH_MAP) {
             entry.fieldLengthMap = { ...FIELD_LENGTH_MAP };
+        }
+        if (!entry.responseCopyByPage) {
+            entry.responseCopyByPage = new Map();
         }
         entry.responseCopyByPage.set(currentPageNumber, structuredClone(data));
         USE_COPY_SESSION_CACHE.set(finalSessionId, entry);
@@ -799,7 +941,7 @@ app.get('/data', async (req, res) => {
         const trimmedSessionId =
             querySessionId && String(querySessionId).trim() !== '' ? String(querySessionId).trim() : null;
         if (trimmedSessionId) {
-            const entry = getUseCopySession(trimmedSessionId);
+            const entry = await getUseCopySession(trimmedSessionId);
             if (!entry) {
                 return res.status(404).json({
                     success: false,
