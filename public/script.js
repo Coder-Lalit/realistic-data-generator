@@ -351,9 +351,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (response.ok && result.success) {
                 generatedData = result.data;
                 currentSession = {
-                    sessionId: result.sessionId,
                     pagination: result.pagination,
-                    originalPayload: formData  // Store original form data for POST requests
+                    originalPayload: formData
                 };
                 
                 if (isLargeDataset) {
@@ -384,10 +383,8 @@ document.addEventListener('DOMContentLoaded', function() {
         showLoading();
         
         try {
-            // Create POST payload with original form data + session ID + page number
             const pagePayload = {
                 ...currentSession.originalPayload,
-                sessionId: currentSession.sessionId,
                 pageNumber: pageNumber
             };
 
@@ -428,7 +425,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Show session info in result-stats
             const sessionInfo = document.getElementById('sessionInfo');
             if (sessionInfo) {
-                sessionInfo.textContent = `Session: ${session.sessionId.slice(-8)}`;
+                sessionInfo.textContent = 'Pagination: stateless (full params each request)';
                 sessionInfo.style.display = 'inline';
             }
         } else {
@@ -473,7 +470,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Update pagination controls
     function updatePaginationControls(session) {
-        const { pagination, sessionId } = session;
+        const { pagination } = session;
         const { currentPage, totalPages, totalRecords, hasNextPage, hasPreviousPage, nextUrl, prevUrl } = pagination;
 
         // Update page indicator
@@ -756,6 +753,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (formData.enablePagination) {
             params.append('enablePagination', 'true');
             params.append('recordsPerPage', formData.recordsPerPage);
+            params.append('pageNumber', '1');
         }
 
         // Generate the GET cURL command

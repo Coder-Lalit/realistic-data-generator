@@ -1,4 +1,6 @@
 const express = require('express');
+const compression = require('compression');
+const crypto = require('crypto');
 const { faker } = require('@faker-js/faker');
 const cors = require('cors');
 const path = require('path');
@@ -9,6 +11,10 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// REST API: behind Render/nginx, trust X-Forwarded-* so req.ip / secure flags are correct (set TRUST_PROXY=false to disable)
+if (process.env.TRUST_PROXY !== 'false') {
+    app.set('trust proxy', 1);
+}
 
 // Logging configuration
 const LOG_LEVELS = {
@@ -19,6 +25,8 @@ const LOG_LEVELS = {
 };
 
 const CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? LOG_LEVELS[process.env.LOG_LEVEL.toUpperCase()] : LOG_LEVELS.INFO;
+/** True when DEBUG is enabled — use in hot paths to avoid building log strings when off */
+const LOG_DEBUG = CURRENT_LOG_LEVEL >= LOG_LEVELS.DEBUG;
 
 // Logging utilities
 const logger = {
@@ -206,84 +214,40 @@ const FIELD_TYPES = [
 // Global variable to store field length mappings for uniform length mode
 let FIELD_LENGTH_MAP = {};
 
-// Schema cache for pagination with TTL (10 minutes)
-const SCHEMA_CACHE = new Map();
-const SCHEMA_TTL = 10 * 60 * 1000; // 10 minutes in milliseconds
-
-// Function to generate unique session ID
-function generateSessionId() {
-    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
-// Function to generate deterministic seed for pagination
-function generatePageSeed(sessionId, pageNumber) {
-    // Enhanced seed generation for better UUID uniqueness
-    const sessionHash = sessionId.split('_').pop(); // Get the random part
-    const timestamp = sessionId.split('_')[1]; // Get timestamp part
-    const pageHash = pageNumber.toString();
-    const combinedString = `${sessionHash}-${pageHash}-${timestamp}`;
-    
-    // Enhanced hash function with more entropy
-    let hash = 0;
-    for (let i = 0; i < combinedString.length; i++) {
-        const char = combinedString.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32bit integer
+/** Deterministic seed from layout params only — keeps uniform lengths stable across pages/requests without sessions */
+function stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedFields) {
+    let h = 2166136261 >>> 0;
+    for (const n of [numFields, numObjects, nestingLevel, nestedFields, 0x554e464d]) {
+        h ^= n;
+        h = Math.imul(h, 16777619);
     }
-    
-    // Add additional entropy based on page number using prime number for better distribution
-    hash = hash ^ (pageNumber * 7919); // Use prime number for better distribution
-    
-    return Math.abs(hash);
+    return h >>> 0;
 }
 
-// Function to clean expired schemas from cache
-function cleanExpiredSchemas() {
-    const now = Date.now();
-    for (const [sessionId, data] of SCHEMA_CACHE.entries()) {
-        if (now > data.expiresAt) {
-            SCHEMA_CACHE.delete(sessionId);
-            console.log(`🗑️  Expired schema removed: ${sessionId}`);
+/** Build query string for GET /data pagination next/prev links (stateless — all params repeated) */
+function buildPaginationDataUrl(req, pageNum) {
+    const src =
+        req.method === 'GET' && req.query && Object.keys(req.query).length ? req.query : req.body || {};
+    const params = new URLSearchParams();
+    params.set('enablePagination', 'true');
+    const keys = [
+        ['numFields', src.numFields],
+        ['numObjects', src.numObjects],
+        ['numNesting', src.numNesting],
+        ['numRecords', src.numRecords ?? src.totalRecords],
+        ['nestedFields', src.nestedFields],
+        ['recordsPerPage', src.recordsPerPage],
+        ['uniformFieldLength', src.uniformFieldLength],
+        ['excludeEmoji', src.excludeEmoji],
+        ['storeIt', src.storeIt]
+    ];
+    for (const [k, v] of keys) {
+        if (v !== undefined && v !== null) {
+            params.set(k, String(v));
         }
     }
-}
-
-// Function to store schema in cache
-function storeSchemaInCache(sessionId, config, fieldLengthMap) {
-    const expiresAt = Date.now() + SCHEMA_TTL;
-    SCHEMA_CACHE.set(sessionId, {
-        config,
-        fieldLengthMap,
-        hasFixedFieldLength: config.uniformFieldLength, // Store the Fixed Field Length flag
-        expiresAt,
-        createdAt: Date.now()
-    });
-    logger.info(`Schema stored for session: ${sessionId.slice(-8)} (TTL: 10min, Fixed Length: ${!!config.uniformFieldLength})`);
-    
-    // Clean expired schemas periodically
-    cleanExpiredSchemas();
-}
-
-// Function to retrieve schema from cache and refresh TTL
-function getSchemaFromCache(sessionId) {
-    const data = SCHEMA_CACHE.get(sessionId);
-    if (!data) {
-        return null;
-    }
-    
-    if (Date.now() > data.expiresAt) {
-        SCHEMA_CACHE.delete(sessionId);
-        logger.debug(`Schema expired and removed: ${sessionId.slice(-8)}`);
-        return null;
-    }
-    
-    // Refresh TTL on access
-    const newExpiresAt = Date.now() + SCHEMA_TTL;
-    data.expiresAt = newExpiresAt;
-    SCHEMA_CACHE.set(sessionId, data);
-    logger.debug(`TTL refreshed for session: ${sessionId.slice(-8)}`);
-    
-    return data;
+    params.set('pageNumber', String(pageNum));
+    return `/data?${params.toString()}`;
 }
 
 // Function to generate field length map from a sample record
@@ -324,7 +288,9 @@ function generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, n
                 // Store the actual length from the sample
                 lengthMap[fieldType] = actualLength;
                 
-                logger.debug(`Field type '${fieldType}': sample value '${stringValue}' -> length ${actualLength}`);
+                if (LOG_DEBUG) {
+                    logger.debug(`Field type '${fieldType}': sample value '${stringValue}' -> length ${actualLength}`);
+                }
             }
         }
     }
@@ -335,9 +301,23 @@ function generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, n
     return lengthMap;
 }
 
-// Middleware
+// Middleware — gzip/deflate JSON and text responses when client accepts it (reduces transfer size)
+const COMPRESSION_THRESHOLD = Math.max(0, parseInt(process.env.COMPRESSION_THRESHOLD_BYTES || '1024', 10) || 1024);
+app.use(
+    compression({
+        threshold: COMPRESSION_THRESHOLD,
+        filter: (req, res) => {
+            if (req.headers['x-no-compression']) {
+                return false;
+            }
+            return compression.filter(req, res);
+        }
+    })
+);
 app.use(cors());
-app.use(express.json());
+// JSON body limit for API clients (large POST bodies with options); override with JSON_BODY_LIMIT e.g. 50mb
+const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '10mb';
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 // Log any response status other than 200 (3xx cache/redirect, 4xx client, 5xx server, etc.)
 app.use((req, res, next) => {
@@ -366,7 +346,7 @@ app.get('/ping', (req, res) => {
         memory: process.memoryUsage(),
         version: '1.0.0',
         environment: process.env.NODE_ENV || 'development',
-        activeSessions: SCHEMA_CACHE.size
+        activeSessions: 0
     };
     
     logger.debug('Ping request received');
@@ -388,209 +368,120 @@ app.get('/config', (req, res) => {
 
 
 // Function to handle paginated requests (shared by /data and /generate-paginated)
+// Stateless: every request must include full generation params + pageNumber (no session or seeding)
 async function handlePaginatedRequest(req, res) {
     try {
-        const { sessionId, pageNumber, numFields, numObjects, numNesting, totalRecords, nestedFields, uniformFieldLength, recordsPerPage, storeIt, excludeEmoji } = req.body;
-        // Determine if this is a new session or existing session navigation
-        const isNewSession = !sessionId || sessionId === null || sessionId === "";
+        const body = req.body || {};
+        const {
+            pageNumber,
+            numFields,
+            numObjects,
+            numNesting,
+            totalRecords,
+            nestedFields,
+            uniformFieldLength,
+            recordsPerPage,
+            excludeEmoji
+        } = body;
+        const totalRec = totalRecords !== undefined ? totalRecords : body.numRecords;
         const currentPageNumber = pageNumber || 1;
-        
-        if (isNewSession) {
-            logger.info(`New pagination session: ${totalRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}`);
-        } else {
-            logger.info(`Pagination navigation: session ${sessionId.slice(-8)}, page ${currentPageNumber}`);
+
+        if (LOG_DEBUG) {
+            logger.debug(
+                `Paginated request: ${totalRec ?? 'default'} total records, ${numFields ?? 'default'} fields, page ${currentPageNumber}, uniform: ${!!uniformFieldLength}`
+            );
         }
 
-        // Set defaults if not provided
         const finalNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
         const finalNumObjects = numObjects !== undefined ? numObjects : 0;
         const finalNumNesting = numNesting !== undefined ? numNesting : 0;
-        const finalTotalRecords = totalRecords !== undefined ? totalRecords : CONFIG.limits.numRecords.default;
+        const finalTotalRecords = totalRec !== undefined ? totalRec : CONFIG.limits.numRecords.default;
         const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
         const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
         const finalRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : 100;
         const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-        // For existing sessions, only sessionId is needed - all other params use cached values
-        const isExistingSession = sessionId && sessionId !== null && sessionId !== "";
-        
-        // No validation required for new sessions - all parameters now have defaults
+        const limits = CONFIG.limits;
 
-        // Validate limits using configuration - only for new sessions
-        if (!isExistingSession) {
-            const limits = CONFIG.limits;
-            
-            if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
-                return res.status(400).json({ 
-                    error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}` 
-                });
-            }
-
-            if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
-                return res.status(400).json({ 
-                    error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}` 
-                });
-            }
-
-            if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
-                return res.status(400).json({ 
-                    error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}` 
-                });
-            }
-
-            if (finalTotalRecords < limits.totalRecordsPagination.min || finalTotalRecords > limits.totalRecordsPagination.max) {
-                return res.status(400).json({ 
-                    error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination` 
-                });
-            }
-
-            if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
-                return res.status(400).json({ 
-                    error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}` 
-                });
-            }
-
-            if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
-                return res.status(400).json({ 
-                    error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}` 
-                });
-            }
+        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
+            return res.status(400).json({
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}`
+            });
         }
-
-        // Performance warning for very large paginated datasets
-        if (totalRecords > 100000) {
-            logger.warn(`Large paginated dataset requested: ${totalRecords} total records. This will create ${Math.ceil(totalRecords / finalRecordsPerPage)} pages.`);
+        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
+            return res.status(400).json({
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}`
+            });
         }
-        
-        // Memory usage estimation for pagination (more realistic calculation)
-        const avgFieldSize = 25; // Average bytes per field (JSON + field name + value)
-        const estimatedMemoryMB = Math.ceil((finalRecordsPerPage * numFields * avgFieldSize) / (1024 * 1024));
-        if (estimatedMemoryMB > 200) { // Per page threshold
-            logger.warn(`Estimated memory usage per page: ~${estimatedMemoryMB}MB. Total dataset: ${totalRecords.toLocaleString()} records.`);
+        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
+            return res.status(400).json({
+                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}`
+            });
         }
-
-        // Handle session ID and page validation
-        let finalSessionId;
-        let cachedData = null;
-        
-        if (isNewSession) {
-            // Generate new session ID for new sessions
-            finalSessionId = generateSessionId();
-            
-            // Validate page number for new sessions (should be 1 or undefined)
-            if (currentPageNumber !== 1) {
-                return res.status(400).json({ 
-                    error: 'New sessions must start from page 1' 
-                });
-            }
-        } else {
-            // Use provided session ID and validate it exists
-            finalSessionId = sessionId;
-            
-            // Validate page number for existing sessions
-            if (currentPageNumber < 1) {
-                return res.status(400).json({ 
-                    error: 'Invalid page number. Must be a positive integer.' 
-                });
-            }
-            
-            // Retrieve and validate existing session
-            cachedData = getSchemaFromCache(finalSessionId);
-            if (!cachedData) {
-                return res.status(404).json({ 
-                    error: 'Session not found or expired. Please start a new pagination session.' 
-                });
-            }
+        if (finalTotalRecords < limits.totalRecordsPagination.min || finalTotalRecords > limits.totalRecordsPagination.max) {
+            return res.status(400).json({
+                error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination`
+            });
         }
-        
-        // Handle configuration for new vs existing sessions
-        let sessionConfig;
-        let effectivePageSize;
-        let effectiveTotalRecords;
-        let fieldLengthMap = null;
-        
-        if (isNewSession) {
-            // Store configuration for new sessions
-            sessionConfig = {
-                numFields: finalNumFields,
-                numObjects: finalNumObjects,
-                numNesting: finalNumNesting,
-                totalRecords: finalTotalRecords,
-                nestedFields: finalNestedFields,
-                uniformFieldLength: finalUniformLength,
-                recordsPerPage: finalRecordsPerPage,
-                excludeEmoji: finalExcludeEmoji
-            };
-            
-            effectivePageSize = finalRecordsPerPage;
-            effectiveTotalRecords = finalTotalRecords;
-            
-            // Generate field length map if uniform length is requested
-            if (finalUniformLength) {
-                fieldLengthMap = generateFieldLengthMapFromSample(finalNumFields, finalNumObjects, finalNumNesting, finalNestedFields);
-            }
-            
-            // Store in cache for new sessions
-            storeSchemaInCache(finalSessionId, sessionConfig, fieldLengthMap);
-        } else {
-            // Use cached configuration for existing sessions
-            sessionConfig = {
-                numFields: cachedData.config.numFields,
-                numObjects: cachedData.config.numObjects,
-                numNesting: cachedData.config.numNesting,
-                totalRecords: cachedData.config.totalRecords,
-                nestedFields: cachedData.config.nestedFields,
-                uniformFieldLength: cachedData.config.uniformFieldLength,
-                recordsPerPage: cachedData.config.recordsPerPage,
-                excludeEmoji: cachedData.config.excludeEmoji
-            };
-            
-            effectivePageSize = cachedData.config.recordsPerPage;
-            effectiveTotalRecords = cachedData.config.totalRecords;
-            fieldLengthMap = cachedData.fieldLengthMap;
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}`
+            });
         }
-
-        // Validate page number against total records
-        const totalPages = Math.ceil(effectiveTotalRecords / effectivePageSize);
-        if (currentPageNumber > totalPages) {
-            return res.status(400).json({ 
-                error: `Page ${currentPageNumber} does not exist. Total pages: ${totalPages}` 
+        if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
+            return res.status(400).json({
+                error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}`
             });
         }
 
-        // Generate data for requested page
+        if (currentPageNumber < 1) {
+            return res.status(400).json({
+                error: 'Invalid page number. Must be a positive integer.'
+            });
+        }
+
+        if (finalTotalRecords > 100000) {
+            logger.warn(
+                `Large paginated dataset requested: ${finalTotalRecords} total records. This will create ${Math.ceil(finalTotalRecords / finalRecordsPerPage)} pages.`
+            );
+        }
+
+        const avgFieldSize = 25;
+        const estimatedMemoryMB = Math.ceil((finalRecordsPerPage * finalNumFields * avgFieldSize) / (1024 * 1024));
+        if (estimatedMemoryMB > 200) {
+            logger.warn(
+                `Estimated memory usage per page: ~${estimatedMemoryMB}MB. Total dataset: ${finalTotalRecords.toLocaleString()} records.`
+            );
+        }
+
+        const effectivePageSize = finalRecordsPerPage;
+        const effectiveTotalRecords = finalTotalRecords;
+        const totalPages = Math.ceil(effectiveTotalRecords / effectivePageSize);
+        if (currentPageNumber > totalPages) {
+            return res.status(400).json({
+                error: `Page ${currentPageNumber} does not exist. Total pages: ${totalPages}`
+            });
+        }
+
         const startIndex = (currentPageNumber - 1) * effectivePageSize;
         const endIndex = Math.min(startIndex + effectivePageSize, effectiveTotalRecords);
         const recordsToGenerate = endIndex - startIndex;
-        
-        // Temporarily set the global field length map for this generation
-        if (fieldLengthMap) {
-            FIELD_LENGTH_MAP = fieldLengthMap;
-        }
 
-        // Generate deterministic data for requested page
-        const seed = generatePageSeed(finalSessionId, currentPageNumber);
         const data = generateRealisticData(
-            sessionConfig.numFields, 
-            sessionConfig.numObjects, 
-            sessionConfig.numNesting, 
-            recordsToGenerate, 
-            sessionConfig.nestedFields, 
-            sessionConfig.uniformFieldLength, 
-            seed,
-            sessionConfig.excludeEmoji,
-            startIndex  // Global record offset - ensures unique UUIDs across all batches
+            finalNumFields,
+            finalNumObjects,
+            finalNumNesting,
+            recordsToGenerate,
+            finalNestedFields,
+            finalUniformLength,
+            finalExcludeEmoji
         );
-        
-        // Calculate pagination info
+
         const hasNextPage = currentPageNumber < totalPages;
         const hasPreviousPage = currentPageNumber > 1;
-
-        // Generate page numbers for navigation
         const nextPageNumber = hasNextPage ? currentPageNumber + 1 : null;
         const prevPageNumber = hasPreviousPage ? currentPageNumber - 1 : null;
 
-        // Build pagination response
         const paginationResponse = {
             currentPage: currentPageNumber,
             totalPages,
@@ -603,19 +494,19 @@ async function handlePaginatedRequest(req, res) {
             prevPageNumber
         };
 
-        // Add navigation URLs for GET requests (relative URLs)
         if (req.method === 'GET') {
-            const baseParams = `enablePagination=true&sessionId=${finalSessionId}`;
-            
-            paginationResponse.nextUrl = hasNextPage ? 
-                `/data?${baseParams}&pageNumber=${nextPageNumber}` : null;
-            paginationResponse.prevUrl = hasPreviousPage ? 
-                `/data?${baseParams}&pageNumber=${prevPageNumber}` : null;
+            paginationResponse.nextUrl = hasNextPage ? buildPaginationDataUrl(req, nextPageNumber) : null;
+            paginationResponse.prevUrl = hasPreviousPage ? buildPaginationDataUrl(req, prevPageNumber) : null;
+        }
+
+        if (LOG_DEBUG && currentPageNumber === totalPages) {
+            logger.debug(
+                `Pagination complete: last page served (${totalPages} pages, ${effectiveTotalRecords} total records, ${recordsToGenerate} records this page)`
+            );
         }
 
         res.json({
             success: true,
-            sessionId: finalSessionId,
             data,
             pagination: paginationResponse
         });
@@ -638,7 +529,6 @@ app.get('/data', async (req, res) => {
             storeIt,
             enablePagination,
             recordsPerPage,
-            sessionId,
             pageNumber,
             excludeEmoji
         } = req.query;
@@ -654,7 +544,6 @@ app.get('/data', async (req, res) => {
             storeIt: storeIt === 'true',
             enablePagination: enablePagination === 'true',
             recordsPerPage: recordsPerPage ? parseInt(recordsPerPage) : undefined,
-            sessionId: sessionId || undefined,
             pageNumber: pageNumber ? parseInt(pageNumber) : undefined,
             excludeEmoji: excludeEmoji === 'true'
         };
@@ -671,7 +560,11 @@ app.get('/data', async (req, res) => {
 
         // If pagination is enabled, redirect to pagination logic
         if (parsedParams.enablePagination) {
-            logger.info(`GET Data request (pagination): ${parsedParams.numRecords || 'existing session'} total records, ${parsedParams.numFields || 'cached'} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`);
+            if (LOG_DEBUG) {
+                logger.debug(
+                    `GET /data (pagination): ${parsedParams.numRecords ?? 'default'} records, ${parsedParams.numFields ?? 'default'} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`
+                );
+            }
             
             // Set defaults for pagination parameters
             const finalPaginationNumFields = parsedParams.numFields !== undefined ? parsedParams.numFields : CONFIG.limits.numFields.default;
@@ -693,7 +586,6 @@ app.get('/data', async (req, res) => {
                 uniformFieldLength: finalPaginationUniformLength,
                 recordsPerPage: finalPaginationRecordsPerPage,
                 pageNumber: parsedParams.pageNumber || 1,
-                sessionId: parsedParams.sessionId,
                 excludeEmoji: finalPaginationExcludeEmoji
             };
             
@@ -764,13 +656,12 @@ app.get('/data', async (req, res) => {
 
         // Generate data
         const data = generateRealisticData(
-            finalNumFields, 
-            finalNumObjects, 
-            finalNumNesting, 
-            finalNumRecords, 
-            finalNestedFields, 
+            finalNumFields,
+            finalNumObjects,
+            finalNumNesting,
+            finalNumRecords,
+            finalNestedFields,
             finalUniformLength,
-            null, // seed
             finalExcludeEmoji
         );
 
@@ -796,11 +687,15 @@ app.get('/data', async (req, res) => {
 // POST endpoint for /data - returns just the data array (same as /generate-data but only returns data)
 app.post('/data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage, excludeEmoji } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage, excludeEmoji, pageNumber: postPageNumber } = req.body;
         
         // If pagination is enabled, redirect to pagination logic
         if (enablePagination) {
-            logger.info(`Data request (pagination): ${numRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`);
+            if (LOG_DEBUG) {
+                logger.debug(
+                    `POST /data (pagination): ${numRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`
+                );
+            }
             
             // Transform request to pagination format and call pagination endpoint internally
             // Set defaults for pagination parameters
@@ -821,7 +716,7 @@ app.post('/data', async (req, res) => {
                 nestedFields: finalPaginationNestedFields,
                 uniformFieldLength: finalPaginationUniformLength,
                 recordsPerPage: finalPaginationRecordsPerPage,
-                pageNumber: 1, // Default to first page
+                pageNumber: postPageNumber !== undefined ? postPageNumber : 1,
                 excludeEmoji: finalPaginationExcludeEmoji
             };
             
@@ -894,7 +789,7 @@ app.post('/data', async (req, res) => {
         }
 
         // Generate data
-        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, null, finalExcludeEmoji);
+        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, finalExcludeEmoji);
 
         // Store to MongoDB if requested
         if (finalStoreIt) {
@@ -985,8 +880,8 @@ app.post('/generate-data', async (req, res) => {
             logger.warn(`Estimated memory usage: ~${estimatedMemoryMB}MB. Monitor server resources.`);
         }
 
-        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, null, finalExcludeEmoji);
-        
+        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, finalExcludeEmoji);
+
         // Store to MongoDB if requested
         if (finalStoreIt) {
             const sessionId = `generate_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1010,50 +905,23 @@ app.post('/generate-data', async (req, res) => {
     }
 });
 
-// Unified paginated data generation endpoint - handles both new sessions and page navigation
+// Paginated data generation (stateless: send full params + pageNumber on every request)
 app.post('/generate-paginated', async (req, res) => {
     return await handlePaginatedRequest(req, res);
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, seed = null, excludeEmoji = false, startIndex = 0) {
+function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, excludeEmoji = false) {
     const records = [];
 
-    // Handle schema generation based on useUniformLength flag
     if (useUniformLength) {
-        // Only generate new map if no map exists (for initial session creation)
-        if (!FIELD_LENGTH_MAP || Object.keys(FIELD_LENGTH_MAP).length === 0) {
-            FIELD_LENGTH_MAP = generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields);
-            logger.debug(`Generated new field length map from sample record for uniform length data`);
-        }
+        faker.seed(stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedFields));
+        FIELD_LENGTH_MAP = generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields);
     } else {
-        // For non-uniform length, completely skip schema generation
-        // Just generate natural data without any length processing
         FIELD_LENGTH_MAP = null;
-        logger.debug(`Generating natural data without any schema or length processing`);
     }
 
     for (let i = 0; i < numRecords; i++) {
-        // For pagination, seed each record from page seed + GLOBAL index. A single numeric seed was
-        // unsafe: (1) JS Number loses precision once globalRecordIndex * 10007 grows past ~2^53,
-        // collapsing different rows to the same seed; (2) faker's numeric seed uses 32 bits only.
-        // BigInt mix + array seed (initByArray) fixes both.
-        if (seed !== null) {
-            const globalRecordIndex = startIndex + i;
-            const g = BigInt(globalRecordIndex);
-            const s = BigInt(seed);
-            const mix = s + g * 10007n + (s % 1000n) * 100000n;
-            faker.seed([
-                Number(mix & 0xffffffffn),
-                Number((mix >> 32n) & 0xffffffffn),
-                Number((mix >> 64n) & 0xffffffffn),
-                seed >>> 0
-            ]);
-            logger.debug(
-                `Deterministic faker seed (page + global index ${globalRecordIndex}) for pagination`
-            );
-        }
-        
         const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength, excludeEmoji);
         records.push(record);
     }
@@ -1211,7 +1079,7 @@ function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniform
         const targetLength = FIELD_LENGTH_MAP[fieldType];
         processedValue = enforceUniformLength(processedValue, fieldType, useUniformLength);
         const finalLength = String(processedValue).length;
-        if (originalLength !== finalLength) {
+        if (LOG_DEBUG && originalLength !== finalLength) {
             logger.debug(`Field '${fieldName}' (${fieldType}) length: ${originalLength} → ${finalLength} (target: ${targetLength})`);
         }
     }
@@ -1404,7 +1272,7 @@ function generateFieldValue(fieldType) {
 
         // Identification & Codes
         case 'uuid':
-            return faker.string.uuid();
+            return crypto.randomUUID();
         case 'nanoid':
             return faker.string.nanoid();
         case 'color':
