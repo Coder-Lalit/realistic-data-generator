@@ -33,6 +33,14 @@ function isStringFieldType(fieldType) {
     return !nonStringFieldTypes.includes(fieldType);
 }
 
+/** useCopy responses refresh uuid_1 on each fetch; compare other fields for determinism */
+function withoutUuid1(record) {
+    if (!record || typeof record !== 'object') return record;
+    const copy = { ...record };
+    delete copy.uuid_1;
+    return copy;
+}
+
 function makeRequest(url, method = 'GET', data = null) {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(url);
@@ -65,15 +73,15 @@ async function testNaturalLengthPagination() {
     console.log();
 
     try {
-        // Step 1: Create session WITHOUT Fixed Field Length
-        console.log('📋 Step 1: Creating session with Natural Field Lengths...');
+        // Step 1: Create paginated session
+        console.log('📋 Step 1: Creating paginated session...');
         const sessionData = {
             numFields: 5,
             numObjects: 0,
             numNesting: 0,
             totalRecords: 10000,
             nestedFields: 0,
-            uniformFieldLength: false  // ⚠️ KEY: Natural lengths
+            useCopy: true
         };
 
         const sessionResponse = await makeRequest('http://localhost:3000/generate-paginated', 'POST', sessionData);
@@ -86,7 +94,7 @@ async function testNaturalLengthPagination() {
         const totalPages = sessionResponse.pagination.totalPages;
         console.log(`✅ Session created: ${sessionId}`);
         console.log(`📊 Total pages: ${totalPages} (${sessionResponse.pagination.totalRecords} records)`);
-        console.log(`🌿 Fixed Field Length: DISABLED (natural variation expected)`);
+        console.log(`🌿 String field lengths vary naturally (Faker output)`);
         console.log();
 
         // Step 2: Analyze natural field length variation from first page
@@ -211,12 +219,11 @@ async function testNaturalLengthPagination() {
                     continue;
                 }
 
-                // Compare first record across all calls
-                const record1 = JSON.stringify(call1.data[0]);
-                const record2 = JSON.stringify(call2.data[0]);
-                const record3 = JSON.stringify(call3.data[0]);
+                const record1 = JSON.stringify(withoutUuid1(call1.data[0]));
+                const record2 = JSON.stringify(withoutUuid1(call2.data[0]));
+                const record3 = JSON.stringify(withoutUuid1(call3.data[0]));
 
-                const isDeterministic = (record1 === record2) && (record2 === record3);
+                const isDeterministic = record1 === record2 && record2 === record3;
                 
                 if (isDeterministic) {
                     console.log(`     ✅ Identical data on all calls`);
@@ -285,6 +292,7 @@ async function testNaturalLengthPagination() {
             console.log('✅ No artificial length constraints applied');
         } else {
             console.log('🐛 ISSUE! Determinism test failed - same page returning different data');
+            process.exit(1);
         }
 
     } catch (error) {

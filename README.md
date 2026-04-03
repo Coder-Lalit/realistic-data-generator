@@ -11,10 +11,7 @@ A powerful Node.js application with a modern web UI for generating realistic JSO
 - **📋 Easy Export**: Copy to clipboard or download as JSON file
 - **⚡ Real-time Generation**: Fast data generation with loading indicators
 - **📱 Mobile Friendly**: Fully responsive design that works on all devices
-- **🔒 Fixed Field Length Mode**: Generate data with consistent field lengths for UI/layout testing
-- **🌿 Natural Length Mode**: Generate data with realistic, varying field lengths
 - **📄 Pagination Support**: Handle large datasets (10K+ records) with efficient pagination
-- **🎯 Smart Field Type Detection**: Intelligent handling of string vs non-string field types
 - **🧪 Comprehensive Testing**: Full test suite with validation for different data generation modes
 - **💾 MongoDB Storage**: Optional data persistence with automatic 24-hour TTL
 - **🔄 Environment Configuration**: Secure environment variable management for database connections
@@ -32,12 +29,18 @@ A powerful Node.js application with a modern web UI for generating realistic JSO
    npm install
    ```
 
-2. **Start the server**:
+2. **Environment file** (optional connections):
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` only for **`MONGODB_URI`** and **`REDIS_URL`** (local defaults point at `127.0.0.1`). Every other setting is optional and has a **built-in default** in code — those are documented below; you do not need to add them to `.env` unless you want to override.
+
+3. **Start the server**:
    ```bash
    npm start
    ```
 
-3. **Open your browser** and navigate to:
+4. **Open your browser** and navigate to:
    ```
    http://localhost:3000
    ```
@@ -48,6 +51,31 @@ For development with auto-restart:
 ```bash
 npm run dev
 ```
+
+## Environment variables
+
+Use **`.env`** (from [`.env.example`](.env.example)) for **`MONGODB_URI`** and **`REDIS_URL`** when you are not using the local defaults. Do not duplicate the variables in the table below in `.env` unless you need to override the default.
+
+| Variable | In `.env`? | Default (if unset) | Purpose |
+|----------|------------|--------------------|---------|
+| `MONGODB_URI` | Yes, if not local | *(none — Mongo disabled)* | MongoDB connection; storage, useCopy backing, async job results |
+| `REDIS_URL` | Yes, if not local | *(none — job queue disabled)* | Redis for BullMQ (`POST /jobs/generate-data`); use `redis://host:port` or `rediss://` for TLS |
+| `PORT` | No | `3000` | HTTP port |
+| `TRUST_PROXY` | No | trust proxy **on**; set to `false` to disable | Behind reverse proxies (e.g. Render) |
+| `LOG_LEVEL` | No | `INFO` | `ERROR`, `WARN`, `INFO`, `DEBUG` |
+| `NODE_ENV` | No | `development` (typical) | Standard Node environment |
+| `USE_COPY_BACKING_STORE` | No | `auto` | `auto` \| `mongo` \| `memory` — where useCopy sessions/pages are stored |
+| `COMPRESSION_THRESHOLD_BYTES` | No | `1024` | Minimum response size (bytes) before gzip |
+| `JSON_BODY_LIMIT` | No | `10mb` | Max JSON body size for Express |
+| `JOB_ATTEMPTS` | No | `2` | BullMQ job retries |
+| `JOB_QUEUE_COMPLETE_MAX_COUNT` | No | `50` | Max completed jobs kept in Redis |
+| `JOB_QUEUE_COMPLETE_MAX_AGE_SEC` | No | `600` | Max age (seconds) for completed job metadata |
+| `JOB_QUEUE_FAIL_MAX_COUNT` | No | `30` | Max failed jobs kept in Redis |
+| `JOB_QUEUE_FAIL_MAX_AGE_SEC` | No | `3600` | Max age (seconds) for failed job metadata |
+| `REDIS_MAX_JOB_RESULT_BYTES` | No | `8388608` (8 MiB) | Max JSON size when storing job output in Redis (no Mongo) |
+| `JOB_RESULT_TTL_SEC` | No | `86400` | TTL for `jobdata:*` keys in Redis |
+
+**Job queue:** With `REDIS_URL` set, run the API (`npm start`) and a worker (`npm run worker`) in separate processes.
 
 ## 🎮 Usage
 
@@ -66,92 +94,13 @@ npm run dev
    - **Copy JSON**: Copy the generated data to clipboard
    - **Download JSON**: Download as a `.json` file
 
-## 🔒 Fixed Field Length Mode
-
-The data generator supports **Fixed Field Length Mode** for consistent UI/layout testing. This feature ensures all string fields have uniform lengths across all records while preserving the natural data types of non-string fields.
-
-### 🎯 How It Works
-
-When `uniformFieldLength: true` is enabled:
-
-1. **String Fields**: Get consistent lengths based on a sample record
-   - `firstName_2`: All names will be exactly 8 characters
-   - `lastName_3`: All surnames will be exactly 5 characters  
-   - `email_39`: All emails will be exactly 25 characters
-   
-2. **Non-String Fields**: Maintain their natural values and types
-   - `age_8`: Remains a number (e.g., 25, 67, 43)
-   - `boolean_85`: Remains a boolean (true/false)
-   - `latitude_22`: Remains a float (e.g., 55.4593)
-   - `uuid_1`: Maintains standard 36-character UUID format
-
-### 🧠 Smart Field Type Detection
-
-The system intelligently categorizes fields into:
-
-**String Fields** (length enforced):
-- Personal info: `firstName`, `lastName`, `fullName`, `bio`, etc.
-- Contact info: `email`, `phone`, `address`, etc.
-- Business data: `company`, `jobTitle`, `department`, etc.
-- Technical data: `uuid`, `nanoid`, `ip`, `userAgent`, etc.
-
-**Non-String Fields** (natural values preserved):
-- **Numbers**: `age`, `salary`, `price`, `rating`, `port`, `number`
-- **Floats**: `latitude`, `longitude`  
-- **Booleans**: `boolean`
-
-### 📊 Example Comparison
-
-**Fixed Length Mode (`uniformFieldLength: true`)**:
-```json
-[
-  {
-    "uuid_1": "4bb76e61-309c-4b28-b10d-e16d6e0fc411",
-    "firstName_2": "Joh",      // ← 3 chars (consistent)
-    "lastName_3": "Smithxyz",  // ← 8 chars (consistent) 
-    "age_8": 25,               // ← Natural number
-    "boolean_85": true         // ← Natural boolean
-  },
-  {
-    "uuid_1": "def360aa-31c7-4ab1-90d2-c172c3f525cb", 
-    "firstName_2": "Jan",      // ← 3 chars (consistent)
-    "lastName_3": "Wilsonab",  // ← 8 chars (consistent)
-    "age_8": 67,               // ← Natural number
-    "boolean_85": false        // ← Natural boolean
-  }
-]
-```
-
-**Natural Length Mode (`uniformFieldLength: false`)**:
-```json
-[
-  {
-    "uuid_1": "4bb76e61-309c-4b28-b10d-e16d6e0fc411",
-    "firstName_2": "John",     // ← 4 chars (natural)
-    "lastName_3": "Smith",     // ← 5 chars (natural)
-    "age_8": 25,               // ← Natural number
-    "boolean_85": true         // ← Natural boolean
-  },
-  {
-    "uuid_1": "def360aa-31c7-4ab1-90d2-c172c3f525cb",
-    "firstName_2": "Alexander", // ← 9 chars (natural)
-    "lastName_3": "Johnson",   // ← 7 chars (natural) 
-    "age_8": 67,               // ← Natural number
-    "boolean_85": false        // ← Natural boolean
-  }
-]
-```
-
 ## 💾 MongoDB Storage
 
 The data generator supports **optional MongoDB storage** for persisting generated data. When enabled, data is automatically stored with a 24-hour TTL (Time To Live).
 
 ### 🔧 Setup
 
-1. **Environment Configuration**: Create a `.env` file in the project root:
-   ```bash
-   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database?retryWrites=true&w=majority
-   ```
+1. **Environment Configuration**: Copy [`.env.example`](.env.example) to `.env` and set `MONGODB_URI` (and `REDIS_URL` if you use the job queue). For Atlas, use a URI such as `mongodb+srv://user:pass@cluster/...`.
 
 2. **Automatic Connection**: The server automatically connects to MongoDB on startup if `MONGODB_URI` is configured
 
@@ -187,7 +136,6 @@ Add the `storeIt: true` parameter to any API request to enable storage:
     "numObjects": 1,
     "numNesting": 1,
     "numRecords": 10,
-    "uniformFieldLength": true,
     "storeIt": true
   },
   "data": [...], // The generated data array
@@ -210,7 +158,6 @@ Content-Type: application/json
   "numNesting": 2,
   "numRecords": 10,
   "nestedFields": 3,
-  "uniformFieldLength": true,   // ← Enable Fixed Field Length Mode
   "storeIt": true               // ← Enable MongoDB Storage
 }
 ```
@@ -234,7 +181,6 @@ Content-Type: application/json
   "numNesting": 2,
   "numRecords": 10,
   "nestedFields": 3,
-  "uniformFieldLength": false,  // ← Natural Length Mode (default)
   "storeIt": false              // ← Disable MongoDB Storage (default)
 }
 ```
@@ -247,7 +193,7 @@ Content-Type: application/json
 #### **GET Data Endpoint (URL parameters)**
 ```bash
 # Basic data generation
-GET /data?numFields=5&numObjects=0&numNesting=0&numRecords=100&nestedFields=0&uniformFieldLength=false&storeIt=false
+GET /data?numFields=5&numObjects=0&numNesting=0&numRecords=100&nestedFields=0&storeIt=false
 
 # Pagination (new session) - supports up to 100M records
 GET /data?numFields=5&numRecords=50000000&enablePagination=true&recordsPerPage=100
@@ -256,7 +202,7 @@ GET /data?numFields=5&numRecords=50000000&enablePagination=true&recordsPerPage=1
 GET /data?enablePagination=true&sessionId=session_1234567890_abc123&pageNumber=2
 
 # Boolean parameters
-GET /data?numFields=3&numRecords=10&uniformFieldLength=true&storeIt=true
+GET /data?numFields=3&numRecords=10&storeIt=true
 ```
 
 **Features:**
@@ -269,7 +215,7 @@ GET /data?numFields=3&numRecords=10&uniformFieldLength=true&storeIt=true
 
 **Parameter Types:**
 - **Integers**: `numFields`, `numObjects`, `numNesting`, `numRecords`, `nestedFields`, `recordsPerPage`, `pageNumber`
-- **Booleans**: `uniformFieldLength=true/false`, `storeIt=true/false`, `enablePagination=true/false`
+- **Booleans**: `storeIt=true/false`, `enablePagination=true/false`
 - **Strings**: `sessionId`
 
 **Response:** Same as POST `/data` - returns array for regular requests or pagination object for paginated requests
@@ -285,7 +231,6 @@ Content-Type: application/json
   "numNesting": 0,
   "totalRecords": 10000,
   "nestedFields": 0,
-  "uniformFieldLength": true,
   "recordsPerPage": 100,
   "storeIt": true               // ← Store paginated data to MongoDB
 }
@@ -355,7 +300,7 @@ Content-Type: application/json
 
 ## 🧪 Testing Suite
 
-The project includes a comprehensive testing suite to validate all data generation modes and features:
+Integration tests call a running server at `http://localhost:3000` (start with `npm start`).
 
 ### 🏃‍♂️ Running Tests
 
@@ -363,67 +308,33 @@ The project includes a comprehensive testing suite to validate all data generati
 # Run all tests
 npm test
 
-# Run specific test suites
-npm run test:fixed        # Fixed Length mode tests
-npm run test:natural      # Natural Length mode tests  
-npm run test:compare      # Comprehensive comparison tests
-npm run test:pagesize     # Configurable page size tests
+# Run specific suites
+npm run test:natural      # Pagination + natural Faker lengths
+npm run test:pagesize     # Configurable records per page
 ```
 
 ### 📋 Test Coverage
 
-1. **Fixed Length Pagination Test** (`test-fixed-length-pagination.js`)
-   - Validates consistent field lengths across all pages
-   - Tests deterministic behavior for same page requests
-   - Handles large datasets (10K+ records)
-   - Validates schema caching functionality
-
-2. **Natural Length Pagination Test** (`test-natural-length-pagination.js`)
-   - Confirms natural field length variation
-   - Tests pagination with realistic data
-   - Validates deterministic behavior
-
-3. **Comprehensive Comparison Test** (`test-comprehensive-comparison.js`)
-   - Side-by-side comparison of Fixed vs Natural modes
-   - Performance benchmarking
-   - Cross-page consistency validation
-   - Field type behavior verification
-
-4. **Field Length Validation Test** (`test-field-length-validation.js`)
-   - Deep analysis of field length consistency
-   - String vs non-string field type validation
-   - Large-scale data validation (1000+ records)
-
-5. **Configurable Page Size Test** (`test-configurable-page-size.js`)
-   - Tests various page sizes (50, 100, 200, 500 records)
-   - Validates pagination metadata accuracy
-
-### 🎯 Smart Test Validation
-
-All tests now include **Smart Field Type Detection**:
-- ✅ **String fields** are validated for length consistency in Fixed mode
-- ⏭️ **Non-string fields** (numbers, booleans) are skipped from length validation
-- 🔍 **Clear reporting** shows which fields are validated vs skipped
+1. **Natural Length Pagination** (`test-natural-length-pagination.js`) — deterministic pages, realistic string variation
+2. **Configurable Page Size** (`test-configurable-page-size.js`) — page sizes and pagination metadata
 
 ## 📁 Project Structure
 
 ```
 data-generator-project/
 ├── package.json          # Project dependencies and scripts
-├── app.js                # Main Express server with Smart Field Detection & MongoDB
-├── .env                  # Environment variables (MONGODB_URI)
+├── app.js                # Main Express server & MongoDB
+├── .env.example          # Template: MONGODB_URI, REDIS_URL (copy to .env)
+├── .env                  # Local overrides (gitignored)
 ├── README.md             # Project documentation
 ├── public/               # Static files
 │   ├── index.html        # Main web interface
 │   ├── styles.css        # Modern styling
 │   └── script.js         # Frontend JavaScript
-└── tests/                # Comprehensive test suite
+└── tests/
     ├── README.md         # Test documentation
     ├── run-all-tests.js  # Test runner
-    ├── test-fixed-length-pagination.js
     ├── test-natural-length-pagination.js
-    ├── test-comprehensive-comparison.js
-    ├── test-field-length-validation.js
     └── test-configurable-page-size.js
 ```
 
@@ -576,68 +487,15 @@ nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 → imei_86 
 
 ## 🔬 Technical Implementation
 
-### 🧠 Smart Field Type Detection Algorithm
+### Data generation
 
-The system uses an intelligent field type detection algorithm to categorize fields:
+- Faker.js produces realistic values; string lengths follow natural variation.
+- Pagination uses deterministic seeds so the same page request returns the same records.
 
-```javascript
-function isStringFieldType(fieldType) {
-    // Field types that generate non-string values
-    const nonStringFieldTypes = [
-        'age',           // number
-        'latitude',      // number  
-        'longitude',     // number
-        'salary',        // number
-        'price',         // number
-        'number',        // number
-        'rating',        // number
-        'port',          // number
-        'boolean'        // boolean
-    ];
-    
-    return !nonStringFieldTypes.includes(fieldType);
-}
-```
+### Pagination and useCopy
 
-### 🔒 Fixed Length Implementation Approach
-
-1. **Sample-Based Schema Generation**:
-   - Generate one sample record with natural Faker.js data
-   - Extract field lengths from the sample for string fields only
-   - Store length mappings for consistent application
-
-2. **Selective Length Enforcement**:
-   - **String fields**: Apply length padding/truncation to match sample
-   - **Non-string fields**: Skip length processing entirely
-   - **Special fields**: UUID and nanoid maintain their standard formats
-
-3. **Deterministic Pagination**:
-   - Use seeded random generation for consistent page results
-   - Cache field length schemas with TTL (10 minutes)
-   - Maintain session-based consistency across page requests
-
-### 🌿 Natural Length Mode
-
-- Uses pure Faker.js output without any length modifications
-- Preserves realistic data variation and authenticity
-- Maintains all original data types and ranges
-- Ideal for realistic testing scenarios
-
-### 📄 Pagination Architecture
-
-- **Session Management**: Unique session IDs for large dataset handling
-- **Schema Caching**: 10-minute TTL for field length maps
-- **Deterministic Seeds**: Consistent data across page requests
-- **Efficient Memory Usage**: Generate pages on-demand, not all at once
-
-### 🧪 Test-Driven Development
-
-All features were developed using a test-driven approach:
-
-1. **Test First**: Write comprehensive tests for expected behavior
-2. **Implementation**: Build features to pass the tests
-3. **Validation**: Ensure both Fixed and Natural modes work correctly
-4. **Regression Testing**: Verify no existing functionality is broken
+- **Sessions**: Large datasets use a session id and `pageNumber` / `recordsPerPage` navigation.
+- **useCopy** (optional): Caches a full generated page per session with a TTL; repeat requests clone rows and refresh `uuid_1` for uniqueness.
 
 ## 🤝 Contributing
 
@@ -655,29 +513,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### 🆕 Latest Updates
 
-**🔒 Fixed Field Length Mode**
-- ✅ Added intelligent field type detection for string vs non-string fields
-- ✅ Implemented selective length enforcement (strings only)
-- ✅ Preserved natural data types for numbers, booleans, and floats
-- ✅ Maintained UUID standard format compliance
-
 **📄 Pagination Support**
-- ✅ Added pagination endpoint for large datasets (10K+ records)
-- ✅ Implemented session-based schema caching with TTL
-- ✅ Added deterministic data generation for consistent page results
-- ✅ Built efficient memory management for on-demand page generation
+- ✅ Pagination endpoint for large datasets (10K+ records)
+- ✅ Session-based navigation with deterministic page generation
+- ✅ Optional useCopy mode with TTL session cache
 
-**🧪 Comprehensive Testing Suite**
-- ✅ Created 5 specialized test files covering all functionality
-- ✅ Added smart field type validation in all tests
-- ✅ Implemented performance benchmarking and comparison tests
-- ✅ Built automated test runner with individual test commands
-
-**🎯 Smart Field Detection**
-- ✅ Categorized all 88 field types into string vs non-string
-- ✅ Updated length validation logic to skip non-string fields
-- ✅ Added clear test reporting for validated vs skipped fields
-- ✅ Ensured data integrity across all generation modes
+**🧪 Testing Suite**
+- ✅ Pagination and page-size integration tests
 
 **💾 MongoDB Storage Integration**
 - ✅ Added optional MongoDB data persistence with 24-hour TTL
@@ -695,25 +537,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Shareable URLs for data generation configurations
 
 **🔧 Technical Improvements**
-- ✅ Refactored field length enforcement algorithm
-- ✅ Added session management for pagination consistency
-- ✅ Implemented schema caching with automatic expiration
+- ✅ Session management for pagination consistency
 - ✅ Enhanced error handling and validation
-- ✅ Added MongoDB integration with Mongoose ODM
+- ✅ MongoDB integration with Mongoose ODM
 
 ### 🎯 Use Cases
 
-**Fixed Length Mode** - Perfect for:
-- 🎨 UI/Layout testing with consistent field widths
-- 📊 Table/grid components with uniform column sizes
-- 🧪 Frontend component testing with predictable data shapes
-- 📱 Mobile UI testing with consistent text lengths
-
-**Natural Length Mode** - Ideal for:
-- 🌿 Realistic data simulation and testing
-- 🔍 Backend API testing with authentic data variation
-- 📈 Performance testing with real-world data patterns
-- 🎭 Demo data that looks genuinely authentic
+**Data generation** — Useful for:
+- 🌿 Realistic data simulation and API testing
+- 📈 Performance and load testing with large paginated datasets
+- 🎭 Demo data that looks authentic
 
 **MongoDB Storage** - Perfect for:
 - 💾 Persisting test data for repeated use across test runs

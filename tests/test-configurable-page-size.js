@@ -95,7 +95,6 @@ async function testConfigurablePageSize() {
                 numNesting: 0,
                 totalRecords: test.totalRecords,
                 nestedFields: 0,
-                uniformFieldLength: false,
                 recordsPerPage: test.pageSize
             };
 
@@ -161,7 +160,6 @@ async function testConfigurablePageSize() {
                 numNesting: 0,
                 totalRecords: 100,
                 nestedFields: 0,
-                uniformFieldLength: false,
                 recordsPerPage: test.pageSize
             };
 
@@ -210,7 +208,6 @@ async function testConfigurablePageSize() {
                 numNesting: 0,
                 totalRecords: test.totalRecords,
                 nestedFields: 0,
-                uniformFieldLength: false,
                 recordsPerPage: test.pageSize
             };
 
@@ -301,7 +298,6 @@ async function testConfigurablePageSize() {
                 numNesting: 0,
                 totalRecords: test.totalRecords,
                 nestedFields: 0,
-                uniformFieldLength: false,
                 recordsPerPage: test.pageSize
             };
 

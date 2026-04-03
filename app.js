@@ -1,11 +1,17 @@
 const express = require('express');
 const compression = require('compression');
 const crypto = require('crypto');
-const { faker } = require('@faker-js/faker');
 const cors = require('cors');
 const path = require('path');
 const http = require('http');
 const mongoose = require('mongoose');
+const { generateRealisticData } = require('./lib/dataGenerator');
+const GeneratedData = require('./lib/generatedDataModel');
+const {
+    isQueueEnabled,
+    addGenerateDataJob,
+    buildJobStatusResponse
+} = require('./lib/jobQueue');
 require('dotenv').config();
 
 const app = express();
@@ -71,42 +77,10 @@ const connectToMongoDB = async () => {
     }
 };
 
-// MongoDB Schema for storing generated data
-const GeneratedDataSchema = new mongoose.Schema({
-    sessionId: {
-        type: String,
-        required: true,
-        index: true
-    },
-    requestParams: {
-        numFields: Number,
-        numObjects: Number,
-        numNesting: Number,
-        numRecords: Number,
-        nestedFields: Number,
-        uniformFieldLength: Boolean,
-        totalRecords: Number,
-        recordsPerPage: Number,
-        storeIt: Boolean
-    },
-    data: {
-        type: mongoose.Schema.Types.Mixed,
-        required: true
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now,
-        expires: 24 * 60 * 60 // 24 hours TTL
-    }
-});
-
-const GeneratedData = mongoose.model('GeneratedData', GeneratedDataSchema);
-
 /** useCopy shared across instances (Render replicas, cluster): session + page snapshots in Mongo. */
 const UseCopySessionSchema = new mongoose.Schema({
     sessionId: { type: String, required: true, unique: true },
     config: { type: mongoose.Schema.Types.Mixed, required: true },
-    fieldLengthMap: { type: mongoose.Schema.Types.Mixed, default: null },
     expiresAt: { type: Date, required: true }
 });
 UseCopySessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
@@ -177,9 +151,6 @@ const CONFIG = {
             max: 50,
             default: 3
         },
-        uniformFieldLength: {
-            default: false  // boolean flag to enable uniform field lengths across records
-        },
         recordsPerPage: {
             min: 10,
             max: 1000,
@@ -192,62 +163,6 @@ const CONFIG = {
         }
     }
 };
-
-// Fixed field types array for consistent ordering
-const FIELD_TYPES = [
-    // Unique Identifier (1 field) - ALWAYS FIRST
-    'uuid',
-    
-    // Personal Information (13 fields)
-    'firstName', 'lastName', 'fullName', 'middleName', 'gender', 'birthDate', 'age',
-    'bio', 'jobTitle', 'suffix', 'prefix', 'phone', 'phoneNumber',
-    
-    // Location & Address (10 fields)
-    'address', 'streetName', 'buildingNumber', 'city', 'state', 'country', 
-    'zipCode', 'latitude', 'longitude', 'timezone',
-    
-    // Business & Finance (13 fields)
-    'company', 'department', 'catchPhrase', 'buzzword', 'salary', 'accountNumber',
-    'routingNumber', 'creditCard', 'currency', 'price', 'transactionType',
-    'bitcoinAddress', 'bankName', 'iban',
-    
-    // Internet & Technology (12 fields)
-    'email', 'website', 'username', 'password', 'domainName', 'ip', 'ipv6',
-    'mac', 'userAgent', 'protocol', 'port', 'emoji',
-    
-    // Commerce & Products (8 fields)
-    'productName', 'productDescription', 'productMaterial', 'productAdjective',
-    'rating', 'isbn', 'ean', 'productCategory',
-    
-    // Vehicle & Transportation (6 fields)
-    'vehicle', 'vehicleModel', 'vehicleManufacturer', 'vehicleType', 'vehicleFuel', 'vin',
-    
-    // System & Files (5 fields)
-    'fileName', 'fileExtension', 'mimeType', 'directoryPath', 'semver',
-    
-    // Dates & Time (5 fields)
-    'date', 'recentDate', 'futureDate', 'weekday', 'month',
-    
-    // Text & Content (6 fields)
-    'description', 'sentence', 'paragraph', 'words', 'slug', 'title',
-    
-    // Identification & Codes (7 fields)
-    'nanoid', 'color', 'hexColor', 'number', 'boolean',
-    'imei', 'creditCardCVV', 'licenseNumber'
-];
-
-// Global variable to store field length mappings for uniform length mode
-let FIELD_LENGTH_MAP = {};
-
-/** Deterministic seed from layout params only — keeps uniform lengths stable across pages/requests without sessions */
-function stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedFields) {
-    let h = 2166136261 >>> 0;
-    for (const n of [numFields, numObjects, nestingLevel, nestedFields, 0x554e464d]) {
-        h ^= n;
-        h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-}
 
 /** Build query string for GET /data pagination next/prev links */
 function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
@@ -269,7 +184,6 @@ function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
         ['numRecords', src.numRecords ?? src.totalRecords],
         ['nestedFields', src.nestedFields],
         ['recordsPerPage', src.recordsPerPage],
-        ['uniformFieldLength', src.uniformFieldLength],
         ['excludeEmoji', src.excludeEmoji],
         ['storeIt', src.storeIt]
     ];
@@ -308,11 +222,10 @@ function cleanExpiredUseCopySessionsMemory() {
     }
 }
 
-function storeUseCopySessionMemory(sessionId, config, fieldLengthMap) {
+function storeUseCopySessionMemory(sessionId, config) {
     cleanExpiredUseCopySessionsMemory();
     USE_COPY_SESSION_CACHE.set(sessionId, {
         config,
-        fieldLengthMap,
         expiresAt: Date.now() + USE_COPY_TTL_MS,
         responseCopyByPage: new Map()
     });
@@ -334,7 +247,7 @@ function getUseCopySessionMemory(sessionId) {
     return entry;
 }
 
-async function storeUseCopySessionMongo(sessionId, config, fieldLengthMap) {
+async function storeUseCopySessionMongo(sessionId, config) {
     if (mongoose.connection.readyState !== 1) {
         throw new Error('MongoDB not connected; set MONGODB_URI or USE_COPY_BACKING_STORE=memory');
     }
@@ -342,7 +255,6 @@ async function storeUseCopySessionMongo(sessionId, config, fieldLengthMap) {
     await UseCopySession.create({
         sessionId,
         config,
-        fieldLengthMap: fieldLengthMap ?? null,
         expiresAt
     });
     logger.info(`useCopy session stored (Mongo): ${sessionId.slice(-12)} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
@@ -358,7 +270,6 @@ async function getUseCopySessionMongo(sessionId) {
     if (!doc) return null;
     return {
         config: doc.config,
-        fieldLengthMap: doc.fieldLengthMap,
         expiresAt: new Date(doc.expiresAt).getTime(),
         storage: 'mongo'
     };
@@ -384,19 +295,12 @@ async function saveUseCopyPageMongo(sessionId, pageNumber, snapshot) {
     }
 }
 
-async function updateUseCopySessionFieldMapMongo(sessionId, map) {
-    await UseCopySession.updateOne(
-        { sessionId },
-        { $set: { fieldLengthMap: map, expiresAt: new Date(Date.now() + USE_COPY_TTL_MS) } }
-    );
-}
-
-async function storeUseCopySession(sessionId, config, fieldLengthMap) {
+async function storeUseCopySession(sessionId, config) {
     if (useCopyUsesMongoStore()) {
-        await storeUseCopySessionMongo(sessionId, config, fieldLengthMap);
+        await storeUseCopySessionMongo(sessionId, config);
         return;
     }
-    storeUseCopySessionMemory(sessionId, config, fieldLengthMap);
+    storeUseCopySessionMemory(sessionId, config);
 }
 
 async function getUseCopySession(sessionId) {
@@ -415,57 +319,6 @@ function applyFreshUuid1FromSnapshot(snapshot) {
         }
     }
     return data;
-}
-
-// Function to generate field length map from a sample record
-function generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields) {
-    logger.debug('Generating field length map from sample record...');
-    
-    // Generate one complete sample record with natural faker data
-    const sampleRecord = generateObject(numFields, numObjects, nestingLevel, nestedFields, false); // false = no uniform length
-    
-    const lengthMap = {};
-    
-    // Extract field lengths from the sample record
-    function extractLengthsFromObject(obj, prefix = '') {
-        for (const [fieldName, fieldValue] of Object.entries(obj)) {
-            if (typeof fieldValue === 'object' && fieldValue !== null && !Array.isArray(fieldValue)) {
-                // Recursively handle nested objects
-                extractLengthsFromObject(fieldValue, `${prefix}${fieldName}.`);
-            } else {
-                // Extract field type from field name (e.g., "firstName_2" -> "firstName")
-                const fieldType = fieldName.split('_')[0];
-                
-                // Special handling for certain field types that should keep natural length
-                if (['uuid', 'nanoid'].includes(fieldType)) {
-                    lengthMap[fieldType] = null; // Skip length enforcement for these
-                    continue;
-                }
-                
-                // Skip length mapping for non-string field types
-                if (!isStringFieldType(fieldType)) {
-                    lengthMap[fieldType] = null; // Skip length enforcement for non-string fields
-                    continue;
-                }
-                
-                // Convert value to string and get its length
-                const stringValue = String(fieldValue);
-                const actualLength = stringValue.length;
-                
-                // Store the actual length from the sample
-                lengthMap[fieldType] = actualLength;
-                
-                if (LOG_DEBUG) {
-                    logger.debug(`Field type '${fieldType}': sample value '${stringValue}' -> length ${actualLength}`);
-                }
-            }
-        }
-    }
-    
-    extractLengthsFromObject(sampleRecord);
-    
-    logger.info(`Generated field length map from sample record with ${Object.keys(lengthMap).length} field types`);
-    return lengthMap;
 }
 
 // Middleware — gzip/deflate JSON and text responses when client accepts it (reduces transfer size)
@@ -522,6 +375,7 @@ app.get('/ping', async (req, res) => {
         version: '1.0.0',
         environment: process.env.NODE_ENV || 'development',
         useCopyStore: useCopyUsesMongoStore() ? 'mongo' : 'memory',
+        jobQueue: isQueueEnabled() ? 'enabled' : 'disabled',
         activeSessions
     };
 
@@ -572,7 +426,6 @@ async function handlePaginatedRequest(req, res) {
             numNesting,
             totalRecords,
             nestedFields,
-            uniformFieldLength,
             recordsPerPage,
             excludeEmoji
         } = body;
@@ -581,7 +434,7 @@ async function handlePaginatedRequest(req, res) {
 
         if (LOG_DEBUG) {
             logger.debug(
-                `Paginated request: ${totalRec ?? 'default'} total records, ${numFields ?? 'default'} fields, page ${currentPageNumber}, uniform: ${!!uniformFieldLength}`
+                `Paginated request: ${totalRec ?? 'default'} total records, ${numFields ?? 'default'} fields, page ${currentPageNumber}`
             );
         }
 
@@ -590,7 +443,6 @@ async function handlePaginatedRequest(req, res) {
         const finalNumNesting = numNesting !== undefined ? numNesting : 0;
         const finalTotalRecords = totalRec !== undefined ? totalRec : CONFIG.limits.numRecords.default;
         const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
         const finalRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : 100;
         const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
@@ -666,7 +518,6 @@ async function handlePaginatedRequest(req, res) {
             finalNumNesting,
             recordsToGenerate,
             finalNestedFields,
-            finalUniformLength,
             finalExcludeEmoji
         );
 
@@ -723,7 +574,6 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         const finalNumNesting = body.numNesting !== undefined ? body.numNesting : 0;
         const finalTotalRecords = totalRec !== undefined ? totalRec : CONFIG.limits.numRecords.default;
         const finalNestedFields = body.nestedFields !== undefined ? body.nestedFields : 0;
-        const finalUniformLength = body.uniformFieldLength !== undefined ? body.uniformFieldLength : false;
         const finalRecordsPerPage = body.recordsPerPage !== undefined ? body.recordsPerPage : 100;
         const finalExcludeEmoji = body.excludeEmoji !== undefined ? body.excludeEmoji : false;
 
@@ -769,13 +619,12 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
             numNesting: finalNumNesting,
             totalRecords: finalTotalRecords,
             nestedFields: finalNestedFields,
-            uniformFieldLength: finalUniformLength,
             recordsPerPage: finalRecordsPerPage,
             excludeEmoji: finalExcludeEmoji
         };
 
         finalSessionId = generateUseCopySessionId();
-        await storeUseCopySession(finalSessionId, sessionConfig, null);
+        await storeUseCopySession(finalSessionId, sessionConfig);
         entry = await getUseCopySession(finalSessionId);
     } else {
         entry = await getUseCopySession(existingSessionId);
@@ -809,42 +658,27 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         if (pageSnapshot != null) {
             data = applyFreshUuid1FromSnapshot(pageSnapshot);
         } else {
-            const prebuiltMap =
-                entry.fieldLengthMap && Object.keys(entry.fieldLengthMap).length > 0 ? entry.fieldLengthMap : null;
             data = generateRealisticData(
                 sessionConfig.numFields,
                 sessionConfig.numObjects,
                 sessionConfig.numNesting,
                 recordsToGenerate,
                 sessionConfig.nestedFields,
-                sessionConfig.uniformFieldLength,
-                sessionConfig.excludeEmoji,
-                prebuiltMap
+                sessionConfig.excludeEmoji
             );
-            if (sessionConfig.uniformFieldLength && !entry.fieldLengthMap && FIELD_LENGTH_MAP) {
-                const mapCopy = { ...FIELD_LENGTH_MAP };
-                await updateUseCopySessionFieldMapMongo(finalSessionId, mapCopy);
-                entry.fieldLengthMap = mapCopy;
-            }
             await saveUseCopyPageMongo(finalSessionId, currentPageNumber, structuredClone(data));
         }
     } else if (entry.responseCopyByPage && entry.responseCopyByPage.has(currentPageNumber)) {
         data = applyFreshUuid1FromSnapshot(entry.responseCopyByPage.get(currentPageNumber));
     } else {
-        const prebuiltMap = entry.fieldLengthMap || null;
         data = generateRealisticData(
             sessionConfig.numFields,
             sessionConfig.numObjects,
             sessionConfig.numNesting,
             recordsToGenerate,
             sessionConfig.nestedFields,
-            sessionConfig.uniformFieldLength,
-            sessionConfig.excludeEmoji,
-            prebuiltMap
+            sessionConfig.excludeEmoji
         );
-        if (sessionConfig.uniformFieldLength && !entry.fieldLengthMap && FIELD_LENGTH_MAP) {
-            entry.fieldLengthMap = { ...FIELD_LENGTH_MAP };
-        }
         if (!entry.responseCopyByPage) {
             entry.responseCopyByPage = new Map();
         }
@@ -900,7 +734,6 @@ app.get('/data', async (req, res) => {
             numNesting,
             numRecords,
             nestedFields,
-            uniformFieldLength,
             storeIt,
             enablePagination,
             recordsPerPage,
@@ -917,7 +750,6 @@ app.get('/data', async (req, res) => {
             numNesting: numNesting !== undefined ? parseInt(numNesting) : undefined,
             numRecords: numRecords ? parseInt(numRecords) : undefined,
             nestedFields: nestedFields !== undefined ? parseInt(nestedFields) : undefined,
-            uniformFieldLength: uniformFieldLength === 'true',
             storeIt: storeIt === 'true',
             enablePagination: enablePagination === 'true',
             recordsPerPage: recordsPerPage ? parseInt(recordsPerPage) : undefined,
@@ -956,7 +788,6 @@ app.get('/data', async (req, res) => {
                 numNesting: cfg.numNesting,
                 totalRecords: cfg.totalRecords,
                 nestedFields: cfg.nestedFields,
-                uniformFieldLength: cfg.uniformFieldLength,
                 recordsPerPage: cfg.recordsPerPage,
                 pageNumber: pageNum,
                 excludeEmoji: cfg.excludeEmoji,
@@ -970,7 +801,7 @@ app.get('/data', async (req, res) => {
         if (parsedParams.enablePagination) {
             if (LOG_DEBUG) {
                 logger.debug(
-                    `GET /data (pagination): ${parsedParams.numRecords ?? 'default'} records, ${parsedParams.numFields ?? 'default'} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`
+                    `GET /data (pagination): ${parsedParams.numRecords ?? 'default'} records, ${parsedParams.numFields ?? 'default'} fields, store: ${!!parsedParams.storeIt}`
                 );
             }
             
@@ -980,7 +811,6 @@ app.get('/data', async (req, res) => {
             const finalPaginationNumNesting = parsedParams.numNesting !== undefined ? parsedParams.numNesting : 0;
             const finalPaginationNumRecords = parsedParams.numRecords !== undefined ? parsedParams.numRecords : CONFIG.limits.numRecords.default;
             const finalPaginationNestedFields = parsedParams.nestedFields !== undefined ? parsedParams.nestedFields : 0;
-            const finalPaginationUniformLength = parsedParams.uniformFieldLength !== undefined ? parsedParams.uniformFieldLength : false;
             const finalPaginationRecordsPerPage = parsedParams.recordsPerPage !== undefined ? parsedParams.recordsPerPage : 100;
             const finalPaginationExcludeEmoji = parsedParams.excludeEmoji !== undefined ? parsedParams.excludeEmoji : false;
             
@@ -991,7 +821,6 @@ app.get('/data', async (req, res) => {
                 numNesting: finalPaginationNumNesting,
                 totalRecords: finalPaginationNumRecords,
                 nestedFields: finalPaginationNestedFields,
-                uniformFieldLength: finalPaginationUniformLength,
                 recordsPerPage: finalPaginationRecordsPerPage,
                 pageNumber: parsedParams.pageNumber || 1,
                 excludeEmoji: finalPaginationExcludeEmoji,
@@ -1004,7 +833,7 @@ app.get('/data', async (req, res) => {
             return await handlePaginatedRequest(mockReq, res);
         }
         
-        logger.info(`GET Data request: ${parsedParams.numRecords} records, ${parsedParams.numFields} fields, uniform: ${!!parsedParams.uniformFieldLength}, store: ${!!parsedParams.storeIt}`);
+        logger.info(`GET Data request: ${parsedParams.numRecords} records, ${parsedParams.numFields} fields, store: ${!!parsedParams.storeIt}`);
 
         // Set defaults if not provided
         const finalNumFields = parsedParams.numFields !== undefined ? parsedParams.numFields : CONFIG.limits.numFields.default;
@@ -1012,7 +841,6 @@ app.get('/data', async (req, res) => {
         const finalNumNesting = parsedParams.numNesting !== undefined ? parsedParams.numNesting : 0;
         const finalNumRecords = parsedParams.numRecords !== undefined ? parsedParams.numRecords : CONFIG.limits.numRecords.default;
         const finalNestedFields = parsedParams.nestedFields !== undefined ? parsedParams.nestedFields : 0;
-        const finalUniformLength = parsedParams.uniformFieldLength !== undefined ? parsedParams.uniformFieldLength : false;
         const finalStoreIt = parsedParams.storeIt !== undefined ? parsedParams.storeIt : false;
         const finalExcludeEmoji = parsedParams.excludeEmoji !== undefined ? parsedParams.excludeEmoji : false;
 
@@ -1071,7 +899,6 @@ app.get('/data', async (req, res) => {
             finalNumNesting,
             finalNumRecords,
             finalNestedFields,
-            finalUniformLength,
             finalExcludeEmoji
         );
 
@@ -1097,13 +924,13 @@ app.get('/data', async (req, res) => {
 // POST endpoint for /data - returns just the data array (same as /generate-data but only returns data)
 app.post('/data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage, excludeEmoji, pageNumber: postPageNumber, sessionId: postSessionId, useCopy: postUseCopy } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, storeIt, enablePagination, recordsPerPage, excludeEmoji, pageNumber: postPageNumber, sessionId: postSessionId, useCopy: postUseCopy } = req.body;
         
         // If pagination is enabled, redirect to pagination logic
         if (enablePagination) {
             if (LOG_DEBUG) {
                 logger.debug(
-                    `POST /data (pagination): ${numRecords} total records, ${numFields} fields, uniform: ${!!uniformFieldLength}, store: ${!!storeIt}`
+                    `POST /data (pagination): ${numRecords} total records, ${numFields} fields, store: ${!!storeIt}`
                 );
             }
             
@@ -1114,7 +941,6 @@ app.post('/data', async (req, res) => {
             const finalPaginationNumNesting = numNesting !== undefined ? numNesting : 0;
             const finalPaginationNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
             const finalPaginationNestedFields = nestedFields !== undefined ? nestedFields : 0;
-            const finalPaginationUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
             const finalPaginationRecordsPerPage = recordsPerPage !== undefined ? recordsPerPage : 100;
             const finalPaginationExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
             
@@ -1124,7 +950,6 @@ app.post('/data', async (req, res) => {
                 numNesting: finalPaginationNumNesting,
                 totalRecords: finalPaginationNumRecords,
                 nestedFields: finalPaginationNestedFields,
-                uniformFieldLength: finalPaginationUniformLength,
                 recordsPerPage: finalPaginationRecordsPerPage,
                 pageNumber: postPageNumber !== undefined ? postPageNumber : 1,
                 excludeEmoji: finalPaginationExcludeEmoji,
@@ -1143,11 +968,10 @@ app.post('/data', async (req, res) => {
         const finalNumNesting = numNesting !== undefined ? numNesting : 0;
         const finalNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
         const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
         const finalStoreIt = storeIt !== undefined ? storeIt : false;
         const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-        logger.info(`Data request: ${finalNumRecords} records, ${finalNumFields} fields, uniform: ${!!finalUniformLength}, store: ${!!finalStoreIt}`);
+        logger.info(`Data request: ${finalNumRecords} records, ${finalNumFields} fields, store: ${!!finalStoreIt}`);
 
         // No validation required - all parameters now have defaults
 
@@ -1201,7 +1025,7 @@ app.post('/data', async (req, res) => {
         }
 
         // Generate data
-        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, finalExcludeEmoji);
+        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalExcludeEmoji);
 
         // Store to MongoDB if requested
         if (finalStoreIt) {
@@ -1212,7 +1036,6 @@ app.post('/data', async (req, res) => {
                 numNesting,
                 numRecords,
                 nestedFields: finalNestedFields,
-                uniformFieldLength: finalUniformLength,
                 storeIt: finalStoreIt
             };
             
@@ -1231,7 +1054,7 @@ app.post('/data', async (req, res) => {
 // Data generation endpoint
 app.post('/generate-data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, excludeEmoji } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, storeIt, excludeEmoji } = req.body;
         
         // Set defaults if not provided
         const finalNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
@@ -1239,11 +1062,10 @@ app.post('/generate-data', async (req, res) => {
         const finalNumNesting = numNesting !== undefined ? numNesting : 0;
         const finalNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
         const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
-        const finalUniformLength = uniformFieldLength !== undefined ? uniformFieldLength : false;
         const finalStoreIt = storeIt !== undefined ? storeIt : false;
         const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-        logger.info(`Data generation request: ${finalNumRecords} records, ${finalNumFields} fields, uniform: ${!!finalUniformLength}, store: ${!!finalStoreIt}`);
+        logger.info(`Data generation request: ${finalNumRecords} records, ${finalNumFields} fields, store: ${!!finalStoreIt}`);
 
         // Validate limits using configuration
         const limits = CONFIG.limits;
@@ -1292,7 +1114,7 @@ app.post('/generate-data', async (req, res) => {
             logger.warn(`Estimated memory usage: ~${estimatedMemoryMB}MB. Monitor server resources.`);
         }
 
-        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalUniformLength, finalExcludeEmoji);
+        const data = generateRealisticData(finalNumFields, finalNumObjects, finalNumNesting, finalNumRecords, finalNestedFields, finalExcludeEmoji);
 
         // Store to MongoDB if requested
         if (finalStoreIt) {
@@ -1303,7 +1125,6 @@ app.post('/generate-data', async (req, res) => {
                 numNesting: finalNumNesting,
                 numRecords: finalNumRecords,
                 nestedFields: finalNestedFields,
-                uniformFieldLength: finalUniformLength,
                 storeIt: finalStoreIt,
                 excludeEmoji: finalExcludeEmoji
             };
@@ -1322,403 +1143,98 @@ app.post('/generate-paginated', async (req, res) => {
     return await handlePaginatedRequest(req, res);
 });
 
-// Function to generate realistic data
-function generateRealisticData(
-    numFields,
-    numObjects,
-    nestingLevel,
-    numRecords,
-    nestedFields,
-    useUniformLength = false,
-    excludeEmoji = false,
-    prebuiltFieldLengthMap = null
-) {
-    const records = [];
-
-    if (useUniformLength) {
-        if (prebuiltFieldLengthMap && Object.keys(prebuiltFieldLengthMap).length > 0) {
-            FIELD_LENGTH_MAP = prebuiltFieldLengthMap;
-        } else {
-            faker.seed(stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedFields));
-            FIELD_LENGTH_MAP = generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields);
+// --- Async job queue (BullMQ + Redis): run `npm run worker` in a separate process ---
+app.post('/jobs/generate-data', async (req, res) => {
+    try {
+        if (!isQueueEnabled()) {
+            return res.status(503).json({
+                error: 'Job queue is not configured. Set REDIS_URL and run the worker (npm run worker).'
+            });
         }
-    } else {
-        FIELD_LENGTH_MAP = null;
-    }
 
-    for (let i = 0; i < numRecords; i++) {
-        const record = generateObject(numFields, numObjects, nestingLevel, nestedFields, useUniformLength, excludeEmoji);
-        records.push(record);
-    }
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, storeIt, excludeEmoji } = req.body;
 
-    return records;
-}
+        const finalNumFields = numFields !== undefined ? numFields : CONFIG.limits.numFields.default;
+        const finalNumObjects = numObjects !== undefined ? numObjects : 0;
+        const finalNumNesting = numNesting !== undefined ? numNesting : 0;
+        const finalNumRecords = numRecords !== undefined ? numRecords : CONFIG.limits.numRecords.default;
+        const finalNestedFields = nestedFields !== undefined ? nestedFields : 0;
+        const finalStoreIt = storeIt !== undefined ? storeIt : false;
+        const finalExcludeEmoji = excludeEmoji !== undefined ? excludeEmoji : false;
 
-// Function to generate a single object with specified parameters
-function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, useUniformLength = false, excludeEmoji = false) {
-    const obj = {};
+        const limits = CONFIG.limits;
 
-    // Generate basic fields using the global FIELD_TYPES array for consistent ordering
-    for (let i = 0; i < numFields; i++) {
-        const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
-        const fieldName = `${fieldType}_${i + 1}`;
-        
-        // Skip emoji-containing fields if excludeEmoji is true
-        if (excludeEmoji && isEmojiField(fieldType)) {
-            continue;
+        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
+            return res.status(400).json({
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}`
+            });
         }
-        
-        const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, fieldType, useUniformLength);
-    }
-
-    // Generate nested objects only if we should nest
-    if (nestingLevel > 0) {
-        for (let i = 0; i < numObjects; i++) {
-            const objectName = `nested_object_${i + 1}`;
-            if (nestingLevel > 1) {
-                // Recursive nesting with same number of objects at each level
-                obj[objectName] = generateObject(nestedFields, numObjects, nestingLevel - 1, nestedFields, useUniformLength, excludeEmoji);
-            } else {
-                // Last level: simple object with configurable number of fields
-                obj[objectName] = generateSimpleObject(nestedFields, useUniformLength, excludeEmoji);
-            }
+        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
+            return res.status(400).json({
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}`
+            });
         }
-    }
-
-    return obj;
-}
-
-// Function to generate a simple object (no nesting)
-function generateSimpleObject(numFields = 4, useUniformLength = false, excludeEmoji = false) {
-    const obj = {};
-
-    // Use the same global FIELD_TYPES array for consistent ordering
-    for (let i = 0; i < numFields; i++) {
-        const fieldType = FIELD_TYPES[i % FIELD_TYPES.length];
-        const fieldName = `${fieldType}_${i + 1}`;
-        
-        // Skip emoji-containing fields if excludeEmoji is true
-        if (excludeEmoji && isEmojiField(fieldType)) {
-            continue;
+        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
+            return res.status(400).json({
+                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}`
+            });
         }
-        
-        const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue, fieldType, useUniformLength);
-    }
-
-    return obj;
-}
-
-// Function to check if a field type is known to contain emojis
-function isEmojiField(fieldType) {
-    const emojiFields = ['bio', 'emoji'];
-    return emojiFields.includes(fieldType);
-}
-
-// Function to detect if text contains emoji characters
-function containsEmoji(text) {
-    if (typeof text !== 'string') return false;
-    
-    // Unicode ranges for emojis
-    const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1F018}-\u{1F270}]|[\u{238C}-\u{2454}]|[\u{20D0}-\u{20FF}]/gu;
-    
-    return emojiRegex.test(text);
-}
-
-// Function to remove emoji characters from text
-function removeEmojis(text) {
-    if (typeof text !== 'string') return text;
-    
-    // Unicode ranges for emojis
-    const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1F018}-\u{1F270}]|[\u{238C}-\u{2454}]|[\u{20D0}-\u{20FF}]/gu;
-    
-    return text.replace(emojiRegex, '').trim();
-}
-
-// Function to determine if a field type generates string values
-function isStringFieldType(fieldType) {
-    // Field types that generate non-string values
-    const nonStringFieldTypes = [
-        'age',           // number
-        'latitude',      // number  
-        'longitude',     // number
-        'salary',        // number
-        'price',         // number
-        'number',        // number
-        'rating',        // number
-        'port',          // number
-        'boolean'        // boolean
-    ];
-    
-    return !nonStringFieldTypes.includes(fieldType);
-}
-
-// Function to enforce uniform field length based on field type
-function enforceUniformLength(fieldValue, fieldType, useUniformLength) {
-    if (!useUniformLength || !FIELD_LENGTH_MAP || !FIELD_LENGTH_MAP.hasOwnProperty(fieldType) || FIELD_LENGTH_MAP[fieldType] === null) {
-        return fieldValue; // No length enforcement, no map, or special null marker
-    }
-    
-    // Only enforce length for string field types
-    if (!isStringFieldType(fieldType)) {
-        return fieldValue; // Skip length enforcement for non-string fields
-    }
-    
-    const targetLength = FIELD_LENGTH_MAP[fieldType];
-    
-    // Convert to string if not already
-    let stringValue = String(fieldValue);
-    
-    if (stringValue.length > targetLength) {
-        // Truncate to exact target length for ALL field types
-        return stringValue.substring(0, targetLength);
-    } else if (stringValue.length < targetLength) {
-        // Pad ALL field types to exact target length
-        const additionalChars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-        while (stringValue.length < targetLength) {
-            const randomIndex = Math.floor(faker.number.float({ min: 0, max: 1 }) * additionalChars.length);
-            stringValue += additionalChars[randomIndex];
+        if (finalNumRecords < limits.numRecords.min || finalNumRecords > limits.numRecords.max) {
+            return res.status(400).json({
+                error: `Number of records must be between ${limits.numRecords.min} and ${limits.numRecords.max}`
+            });
         }
-        return stringValue;
-    }
-    
-    return stringValue;
-}
-
-// Function to validate and clean field values
-function validateAndCleanFieldValue(fieldName, fieldValue, fieldType, useUniformLength = false) {
-    let processedValue = fieldValue;
-    
-    // Skip emoji validation for fields that start with "emoji"
-    if (!fieldName.toLowerCase().startsWith('emoji')) {
-        // Check if the field contains emojis and remove them if found
-        if (containsEmoji(processedValue)) {
-            processedValue = removeEmojis(processedValue);
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}`
+            });
         }
+
+        const jobPayload = {
+            numFields: finalNumFields,
+            numObjects: finalNumObjects,
+            numNesting: finalNumNesting,
+            numRecords: finalNumRecords,
+            nestedFields: finalNestedFields,
+            storeIt: finalStoreIt,
+            excludeEmoji: finalExcludeEmoji
+        };
+
+        const job = await addGenerateDataJob(jobPayload);
+        logger.info(`Queued data generation job ${job.id}`);
+
+        res.json({
+            success: true,
+            jobId: String(job.id),
+            state: 'queued',
+            message: 'Poll GET /jobs/:jobId until state is completed, then read the data field.',
+            pollUrl: `/jobs/${job.id}`
+        });
+    } catch (error) {
+        logger.error(`Job enqueue error: ${error.message}`);
+        res.status(500).json({ error: error.message });
     }
-    
-    // Apply uniform length if specified and field length map exists
-    if (useUniformLength && FIELD_LENGTH_MAP && FIELD_LENGTH_MAP.hasOwnProperty(fieldType) && FIELD_LENGTH_MAP[fieldType] !== null) {
-        const originalLength = String(processedValue).length;
-        const targetLength = FIELD_LENGTH_MAP[fieldType];
-        processedValue = enforceUniformLength(processedValue, fieldType, useUniformLength);
-        const finalLength = String(processedValue).length;
-        if (LOG_DEBUG && originalLength !== finalLength) {
-            logger.debug(`Field '${fieldName}' (${fieldType}) length: ${originalLength} → ${finalLength} (target: ${targetLength})`);
+});
+
+app.get('/jobs/:jobId', async (req, res) => {
+    try {
+        if (!isQueueEnabled()) {
+            return res.status(503).json({
+                error: 'Job queue is not configured. Set REDIS_URL and run the worker (npm run worker).'
+            });
         }
+
+        const report = await buildJobStatusResponse(req.params.jobId);
+        if (!report) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+
+        res.json(report);
+    } catch (error) {
+        logger.error(`Job status error: ${error.message}`);
+        res.status(500).json({ error: error.message });
     }
-    
-    return processedValue;
-}
-
-// Function to generate field values based on type
-function generateFieldValue(fieldType) {
-    switch (fieldType) {
-        // Personal Information
-        case 'firstName':
-            return faker.person.firstName();
-        case 'lastName':
-            return faker.person.lastName();
-        case 'fullName':
-            return faker.person.fullName();
-        case 'middleName':
-            return faker.person.middleName();
-        case 'gender':
-            return faker.person.gender();
-        case 'birthDate':
-            return faker.date.birthdate({ min: 18, max: 80, mode: 'age' }).toISOString().split('T')[0];
-        case 'age':
-            return faker.number.int({ min: 18, max: 85 });
-        case 'bio':
-            return faker.person.bio();
-        case 'jobTitle':
-            return faker.person.jobTitle();
-        case 'suffix':
-            return faker.person.suffix();
-        case 'prefix':
-            return faker.person.prefix();
-
-        // Location & Address
-        case 'address':
-            return faker.location.streetAddress();
-        case 'streetName':
-            return faker.location.street();
-        case 'buildingNumber':
-            return faker.location.buildingNumber();
-        case 'city':
-            return faker.location.city();
-        case 'state':
-            return faker.location.state();
-        case 'country':
-            return faker.location.country();
-        case 'zipCode':
-            return faker.location.zipCode();
-        case 'latitude':
-            return faker.location.latitude();
-        case 'longitude':
-            return faker.location.longitude();
-        case 'timezone':
-            return faker.location.timeZone();
-
-        // Business & Finance
-        case 'company':
-            return faker.company.name();
-        case 'department':
-            return faker.commerce.department();
-        case 'catchPhrase':
-            return faker.company.catchPhrase();
-        case 'buzzword':
-            return faker.company.buzzPhrase();
-        case 'salary':
-            return faker.number.int({ min: 30000, max: 200000 });
-        case 'accountNumber':
-            return faker.finance.accountNumber();
-        case 'routingNumber':
-            return faker.finance.routingNumber();
-        case 'creditCard':
-            return faker.finance.creditCardNumber();
-        case 'currency':
-            return faker.finance.currencyCode();
-        case 'price':
-            return parseFloat(faker.commerce.price({ min: 1, max: 1000, dec: 2 }));
-        case 'transactionType':
-            return faker.finance.transactionType();
-        case 'bitcoinAddress':
-            return faker.finance.bitcoinAddress();
-        case 'bankName':
-            return faker.company.name() + ' Bank';
-        case 'iban':
-            return faker.finance.iban();
-
-        // Internet & Technology
-        case 'email':
-            return faker.internet.email();
-        case 'website':
-            return faker.internet.url();
-        case 'username':
-            return faker.internet.userName();
-        case 'password':
-            return faker.internet.password({ length: 12 });
-        case 'domainName':
-            return faker.internet.domainName();
-        case 'ip':
-            return faker.internet.ip();
-        case 'ipv6':
-            return faker.internet.ipv6();
-        case 'mac':
-            return faker.internet.mac();
-        case 'userAgent':
-            return faker.internet.userAgent();
-        case 'protocol':
-            return faker.internet.protocol();
-        case 'port':
-            return faker.internet.port();
-        case 'emoji':
-            return faker.internet.emoji();
-
-        // Commerce & Products
-        case 'productName':
-            return faker.commerce.productName();
-        case 'productDescription':
-            return faker.commerce.productDescription();
-        case 'productMaterial':
-            return faker.commerce.productMaterial();
-        case 'productAdjective':
-            return faker.commerce.productAdjective();
-        case 'rating':
-            return faker.number.float({ min: 1, max: 5, fractionDigits: 1 });
-        case 'isbn':
-            return faker.commerce.isbn();
-        case 'ean':
-            return faker.commerce.isbn({ variant: 13 });
-        case 'productCategory':
-            return faker.commerce.department();
-
-        // Vehicle & Transportation
-        case 'vehicle':
-            return faker.vehicle.vehicle();
-        case 'vehicleModel':
-            return faker.vehicle.model();
-        case 'vehicleManufacturer':
-            return faker.vehicle.manufacturer();
-        case 'vehicleType':
-            return faker.vehicle.type();
-        case 'vehicleFuel':
-            return faker.vehicle.fuel();
-        case 'vin':
-            return faker.vehicle.vin();
-
-        // System & Files
-        case 'fileName':
-            return faker.system.fileName();
-        case 'fileExtension':
-            return faker.system.fileExt();
-        case 'mimeType':
-            return faker.system.mimeType();
-        case 'directoryPath':
-            return faker.system.directoryPath();
-        case 'semver':
-            return faker.system.semver();
-
-        // Dates & Time
-        case 'date':
-            return faker.date.recent().toISOString();
-        case 'recentDate':
-            return faker.date.recent({ days: 30 }).toISOString().split('T')[0];
-        case 'futureDate':
-            return faker.date.future({ years: 1 }).toISOString().split('T')[0];
-        case 'weekday':
-            return faker.date.weekday();
-        case 'month':
-            return faker.date.month();
-        case 'timeZone':
-            return faker.location.timeZone();
-
-        // Text & Content
-        case 'description':
-            return faker.hacker.phrase();
-        case 'sentence':
-            return faker.lorem.sentence();
-        case 'paragraph':
-            return faker.lorem.paragraph();
-        case 'words':
-            return faker.lorem.words();
-        case 'slug':
-            return faker.lorem.slug();
-        case 'title':
-            return faker.lorem.sentence({ min: 3, max: 6 }).replace(/\.$/, '');
-
-        // Communication
-        case 'phone':
-            return faker.phone.number();
-        case 'phoneNumber':
-            return faker.phone.number();
-
-        // Identification & Codes
-        case 'uuid':
-            return crypto.randomUUID();
-        case 'nanoid':
-            return faker.string.nanoid();
-        case 'color':
-            return faker.color.human();
-        case 'hexColor':
-            return faker.color.rgb();
-        case 'number':
-            return faker.number.int({ min: 1, max: 10000 });
-        case 'boolean':
-            return faker.datatype.boolean();
-        case 'imei':
-            return faker.phone.imei();
-        case 'creditCardCVV':
-            return faker.finance.creditCardCVV();
-        case 'licenseNumber':
-            return faker.string.alphanumeric({ length: { min: 8, max: 12 } }).toUpperCase();
-
-        default:
-            return faker.word.noun();
-    }
-}
+});
 
 app.listen(PORT, () => {
     logger.info(`Data Generator Server running on http://localhost:${PORT}`);

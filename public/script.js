@@ -90,7 +90,6 @@ document.addEventListener('DOMContentLoaded', function() {
             numRecords: enablePagination ? null : numRecordsValue,
             totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
-            uniformFieldLength: document.getElementById('uniformFieldLength').checked,
             storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
             enablePagination: enablePagination,
@@ -648,11 +647,6 @@ document.addEventListener('DOMContentLoaded', function() {
             warnings.push(`• Complex nesting will create ~${totalNestedFields} nested fields per record.`);
         }
 
-        // Uniform field length with large dataset
-        if (formData.uniformFieldLength && numRecordsValue > 2000) {
-            warnings.push(`• Fixed field lengths with ${numRecordsValue.toLocaleString()} records requires extra processing.`);
-        }
-
         return warnings;
     }
 
@@ -745,7 +739,6 @@ document.addEventListener('DOMContentLoaded', function() {
             numRecords: enablePagination ? null : numRecordsValue,
             totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
-            uniformFieldLength: document.getElementById('uniformFieldLength').checked,
             storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
             enablePagination: enablePagination,
@@ -768,7 +761,6 @@ document.addEventListener('DOMContentLoaded', function() {
         params.append('numNesting', formData.numNesting);
         params.append('numRecords', formData.enablePagination ? formData.totalRecords : formData.numRecords);
         params.append('nestedFields', formData.nestedFields);
-        params.append('uniformFieldLength', formData.uniformFieldLength);
         params.append('storeIt', formData.storeIt);
 
         // Add pagination parameters if enabled
