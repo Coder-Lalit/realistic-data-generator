@@ -224,8 +224,15 @@ function stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedF
     return h >>> 0;
 }
 
-/** Build query string for GET /data pagination next/prev links (stateless — all params repeated) */
-function buildPaginationDataUrl(req, pageNum) {
+/** Build query string for GET /data pagination next/prev links */
+function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
+    // useCopy: config lives in session — only sessionId + pageNumber are needed
+    if (useCopyOpts?.sessionId) {
+        const params = new URLSearchParams();
+        params.set('sessionId', useCopyOpts.sessionId);
+        params.set('pageNumber', String(pageNum));
+        return `/data?${params.toString()}`;
+    }
     const src =
         req.method === 'GET' && req.query && Object.keys(req.query).length ? req.query : req.body || {};
     const params = new URLSearchParams();
@@ -248,6 +255,61 @@ function buildPaginationDataUrl(req, pageNum) {
     }
     params.set('pageNumber', String(pageNum));
     return `/data?${params.toString()}`;
+}
+
+// --- useCopy: session cache (TTL) — full generate once per page, then clone + fresh uuid_1 ----------
+const USE_COPY_TTL_MS = 10 * 60 * 1000;
+const USE_COPY_SESSION_CACHE = new Map();
+
+function generateUseCopySessionId() {
+    return `ucopy_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function cleanExpiredUseCopySessions() {
+    const now = Date.now();
+    for (const [id, entry] of USE_COPY_SESSION_CACHE.entries()) {
+        if (now > entry.expiresAt) {
+            USE_COPY_SESSION_CACHE.delete(id);
+            logger.debug(`useCopy session expired: ${id}`);
+        }
+    }
+}
+
+function storeUseCopySession(sessionId, config, fieldLengthMap) {
+    cleanExpiredUseCopySessions();
+    USE_COPY_SESSION_CACHE.set(sessionId, {
+        config,
+        fieldLengthMap,
+        expiresAt: Date.now() + USE_COPY_TTL_MS,
+        responseCopyByPage: new Map()
+    });
+    logger.info(`useCopy session stored: ${sessionId.slice(-12)} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
+}
+
+function getUseCopySession(sessionId) {
+    const entry = USE_COPY_SESSION_CACHE.get(sessionId);
+    if (!entry) {
+        return null;
+    }
+    if (Date.now() > entry.expiresAt) {
+        USE_COPY_SESSION_CACHE.delete(sessionId);
+        logger.debug(`useCopy session removed (expired): ${sessionId}`);
+        return null;
+    }
+    entry.expiresAt = Date.now() + USE_COPY_TTL_MS;
+    USE_COPY_SESSION_CACHE.set(sessionId, entry);
+    return entry;
+}
+
+/** Deep clone rows and assign new top-level uuid_1 */
+function applyFreshUuid1FromSnapshot(snapshot) {
+    const data = structuredClone(snapshot);
+    for (const row of data) {
+        if (row && typeof row === 'object' && Object.prototype.hasOwnProperty.call(row, 'uuid_1')) {
+            row.uuid_1 = crypto.randomUUID();
+        }
+    }
+    return data;
 }
 
 // Function to generate field length map from a sample record
@@ -346,7 +408,7 @@ app.get('/ping', (req, res) => {
         memory: process.memoryUsage(),
         version: '1.0.0',
         environment: process.env.NODE_ENV || 'development',
-        activeSessions: 0
+        activeSessions: USE_COPY_SESSION_CACHE.size
     };
     
     logger.debug('Ping request received');
@@ -368,10 +430,27 @@ app.get('/config', (req, res) => {
 
 
 // Function to handle paginated requests (shared by /data and /generate-paginated)
-// Stateless: every request must include full generation params + pageNumber (no session or seeding)
+// Default: stateless (full params each time). useCopy=true: session + TTL cache; repeat = clone + new uuid_1
 async function handlePaginatedRequest(req, res) {
     try {
         const body = req.body || {};
+        const useCopyFlag =
+            body.useCopy === true || body.useCopy === 'true' || body.useCopy === 1 || body.useCopy === '1';
+        const existingUseCopySessionId =
+            body.sessionId && String(body.sessionId).trim() !== '' ? String(body.sessionId).trim() : null;
+
+        let useCopy = useCopyFlag;
+        if (!useCopy && existingUseCopySessionId) {
+            const cached = USE_COPY_SESSION_CACHE.get(existingUseCopySessionId);
+            if (cached && Date.now() <= cached.expiresAt) {
+                useCopy = true;
+            }
+        }
+
+        if (useCopy) {
+            return await handlePaginatedUseCopy(req, res, body, existingUseCopySessionId);
+        }
+
         const {
             pageNumber,
             numFields,
@@ -515,6 +594,160 @@ async function handlePaginatedRequest(req, res) {
     }
 }
 
+async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
+    const pageNumber = body.pageNumber || 1;
+    const currentPageNumber = pageNumber;
+    const totalRec = body.totalRecords !== undefined ? body.totalRecords : body.numRecords;
+
+    let sessionConfig;
+    let entry = null;
+    let finalSessionId = existingSessionId;
+
+    if (!existingSessionId) {
+        const finalNumFields = body.numFields !== undefined ? body.numFields : CONFIG.limits.numFields.default;
+        const finalNumObjects = body.numObjects !== undefined ? body.numObjects : 0;
+        const finalNumNesting = body.numNesting !== undefined ? body.numNesting : 0;
+        const finalTotalRecords = totalRec !== undefined ? totalRec : CONFIG.limits.numRecords.default;
+        const finalNestedFields = body.nestedFields !== undefined ? body.nestedFields : 0;
+        const finalUniformLength = body.uniformFieldLength !== undefined ? body.uniformFieldLength : false;
+        const finalRecordsPerPage = body.recordsPerPage !== undefined ? body.recordsPerPage : 100;
+        const finalExcludeEmoji = body.excludeEmoji !== undefined ? body.excludeEmoji : false;
+
+        const limits = CONFIG.limits;
+        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
+            return res.status(400).json({
+                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}`
+            });
+        }
+        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
+            return res.status(400).json({
+                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}`
+            });
+        }
+        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
+            return res.status(400).json({
+                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}`
+            });
+        }
+        if (finalTotalRecords < limits.totalRecordsPagination.min || finalTotalRecords > limits.totalRecordsPagination.max) {
+            return res.status(400).json({
+                error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination`
+            });
+        }
+        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+            return res.status(400).json({
+                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}`
+            });
+        }
+        if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
+            return res.status(400).json({
+                error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}`
+            });
+        }
+
+        if (currentPageNumber < 1) {
+            return res.status(400).json({ error: 'Invalid page number. Must be a positive integer.' });
+        }
+
+        sessionConfig = {
+            numFields: finalNumFields,
+            numObjects: finalNumObjects,
+            numNesting: finalNumNesting,
+            totalRecords: finalTotalRecords,
+            nestedFields: finalNestedFields,
+            uniformFieldLength: finalUniformLength,
+            recordsPerPage: finalRecordsPerPage,
+            excludeEmoji: finalExcludeEmoji
+        };
+
+        finalSessionId = generateUseCopySessionId();
+        storeUseCopySession(finalSessionId, sessionConfig, null);
+        entry = getUseCopySession(finalSessionId);
+    } else {
+        entry = getUseCopySession(existingSessionId);
+        if (!entry) {
+            return res.status(404).json({
+                error: 'useCopy session not found or expired. Start again with useCopy=true and no sessionId.'
+            });
+        }
+        sessionConfig = entry.config;
+        finalSessionId = existingSessionId;
+    }
+
+    const effectivePageSize = sessionConfig.recordsPerPage;
+    const effectiveTotalRecords = sessionConfig.totalRecords;
+    const totalPages = Math.ceil(effectiveTotalRecords / effectivePageSize);
+
+    if (currentPageNumber > totalPages) {
+        return res.status(400).json({
+            error: `Page ${currentPageNumber} does not exist. Total pages: ${totalPages}`
+        });
+    }
+
+    const startIndex = (currentPageNumber - 1) * effectivePageSize;
+    const endIndex = Math.min(startIndex + effectivePageSize, effectiveTotalRecords);
+    const recordsToGenerate = endIndex - startIndex;
+
+    let data;
+    if (entry.responseCopyByPage.has(currentPageNumber)) {
+        data = applyFreshUuid1FromSnapshot(entry.responseCopyByPage.get(currentPageNumber));
+    } else {
+        const prebuiltMap = entry.fieldLengthMap || null;
+        data = generateRealisticData(
+            sessionConfig.numFields,
+            sessionConfig.numObjects,
+            sessionConfig.numNesting,
+            recordsToGenerate,
+            sessionConfig.nestedFields,
+            sessionConfig.uniformFieldLength,
+            sessionConfig.excludeEmoji,
+            prebuiltMap
+        );
+        if (sessionConfig.uniformFieldLength && !entry.fieldLengthMap && FIELD_LENGTH_MAP) {
+            entry.fieldLengthMap = { ...FIELD_LENGTH_MAP };
+        }
+        entry.responseCopyByPage.set(currentPageNumber, structuredClone(data));
+        USE_COPY_SESSION_CACHE.set(finalSessionId, entry);
+    }
+
+    const hasNextPage = currentPageNumber < totalPages;
+    const hasPreviousPage = currentPageNumber > 1;
+    const nextPageNumber = hasNextPage ? currentPageNumber + 1 : null;
+    const prevPageNumber = hasPreviousPage ? currentPageNumber - 1 : null;
+
+    const urlOpts = { sessionId: finalSessionId, useCopy: true };
+    const paginationResponse = {
+        currentPage: currentPageNumber,
+        totalPages,
+        totalRecords: effectiveTotalRecords,
+        recordsPerPage: effectivePageSize,
+        recordsInCurrentPage: recordsToGenerate,
+        hasNextPage,
+        hasPreviousPage,
+        nextPageNumber,
+        prevPageNumber,
+        useCopy: true
+    };
+
+    if (req.method === 'GET') {
+        paginationResponse.nextUrl = hasNextPage ? buildPaginationDataUrl(req, nextPageNumber, urlOpts) : null;
+        paginationResponse.prevUrl = hasPreviousPage ? buildPaginationDataUrl(req, prevPageNumber, urlOpts) : null;
+    }
+
+    if (currentPageNumber === totalPages) {
+        logger.info(
+            `Pagination complete: last page served (${totalPages} pages, ${effectiveTotalRecords} total records, ${recordsToGenerate} records this page) [useCopy]`
+        );
+    }
+
+    res.json({
+        success: true,
+        sessionId: finalSessionId,
+        data,
+        pagination: paginationResponse
+    });
+}
+
 // GET endpoint for /data - accepts parameters via URL query string
 app.get('/data', async (req, res) => {
     try {
@@ -530,7 +763,9 @@ app.get('/data', async (req, res) => {
             enablePagination,
             recordsPerPage,
             pageNumber,
-            excludeEmoji
+            excludeEmoji,
+            sessionId: querySessionId,
+            useCopy: queryUseCopy
         } = req.query;
 
         // Convert string parameters to appropriate types
@@ -545,7 +780,9 @@ app.get('/data', async (req, res) => {
             enablePagination: enablePagination === 'true',
             recordsPerPage: recordsPerPage ? parseInt(recordsPerPage) : undefined,
             pageNumber: pageNumber ? parseInt(pageNumber) : undefined,
-            excludeEmoji: excludeEmoji === 'true'
+            excludeEmoji: excludeEmoji === 'true',
+            sessionId: querySessionId || undefined,
+            useCopy: queryUseCopy === 'true'
         };
 
         // Create a mock request object with the parsed parameters in the body
@@ -557,6 +794,35 @@ app.get('/data', async (req, res) => {
             protocol: req.protocol,
             get: req.get.bind(req)
         };
+
+        // Minimal useCopy URLs: ?sessionId=...&pageNumber=N (config is loaded from session cache)
+        const trimmedSessionId =
+            querySessionId && String(querySessionId).trim() !== '' ? String(querySessionId).trim() : null;
+        if (trimmedSessionId) {
+            const entry = getUseCopySession(trimmedSessionId);
+            if (!entry) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'useCopy session not found or expired. Start again with useCopy=true and no sessionId.'
+                });
+            }
+            const cfg = entry.config;
+            const pageNum = parsedParams.pageNumber || 1;
+            mockReq.body = {
+                numFields: cfg.numFields,
+                numObjects: cfg.numObjects,
+                numNesting: cfg.numNesting,
+                totalRecords: cfg.totalRecords,
+                nestedFields: cfg.nestedFields,
+                uniformFieldLength: cfg.uniformFieldLength,
+                recordsPerPage: cfg.recordsPerPage,
+                pageNumber: pageNum,
+                excludeEmoji: cfg.excludeEmoji,
+                sessionId: trimmedSessionId,
+                useCopy: true
+            };
+            return await handlePaginatedRequest(mockReq, res);
+        }
 
         // If pagination is enabled, redirect to pagination logic
         if (parsedParams.enablePagination) {
@@ -586,7 +852,9 @@ app.get('/data', async (req, res) => {
                 uniformFieldLength: finalPaginationUniformLength,
                 recordsPerPage: finalPaginationRecordsPerPage,
                 pageNumber: parsedParams.pageNumber || 1,
-                excludeEmoji: finalPaginationExcludeEmoji
+                excludeEmoji: finalPaginationExcludeEmoji,
+                sessionId: parsedParams.sessionId,
+                useCopy: parsedParams.useCopy
             };
             
             // Call the pagination logic directly
@@ -687,7 +955,7 @@ app.get('/data', async (req, res) => {
 // POST endpoint for /data - returns just the data array (same as /generate-data but only returns data)
 app.post('/data', async (req, res) => {
     try {
-        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage, excludeEmoji, pageNumber: postPageNumber } = req.body;
+        const { numFields, numObjects, numNesting, numRecords, nestedFields, uniformFieldLength, storeIt, enablePagination, recordsPerPage, excludeEmoji, pageNumber: postPageNumber, sessionId: postSessionId, useCopy: postUseCopy } = req.body;
         
         // If pagination is enabled, redirect to pagination logic
         if (enablePagination) {
@@ -717,7 +985,9 @@ app.post('/data', async (req, res) => {
                 uniformFieldLength: finalPaginationUniformLength,
                 recordsPerPage: finalPaginationRecordsPerPage,
                 pageNumber: postPageNumber !== undefined ? postPageNumber : 1,
-                excludeEmoji: finalPaginationExcludeEmoji
+                excludeEmoji: finalPaginationExcludeEmoji,
+                sessionId: postSessionId,
+                useCopy: postUseCopy
             };
             
             // Call the pagination logic directly
@@ -911,12 +1181,25 @@ app.post('/generate-paginated', async (req, res) => {
 });
 
 // Function to generate realistic data
-function generateRealisticData(numFields, numObjects, nestingLevel, numRecords, nestedFields, useUniformLength = false, excludeEmoji = false) {
+function generateRealisticData(
+    numFields,
+    numObjects,
+    nestingLevel,
+    numRecords,
+    nestedFields,
+    useUniformLength = false,
+    excludeEmoji = false,
+    prebuiltFieldLengthMap = null
+) {
     const records = [];
 
     if (useUniformLength) {
-        faker.seed(stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedFields));
-        FIELD_LENGTH_MAP = generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields);
+        if (prebuiltFieldLengthMap && Object.keys(prebuiltFieldLengthMap).length > 0) {
+            FIELD_LENGTH_MAP = prebuiltFieldLengthMap;
+        } else {
+            faker.seed(stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedFields));
+            FIELD_LENGTH_MAP = generateFieldLengthMapFromSample(numFields, numObjects, nestingLevel, nestedFields);
+        }
     } else {
         FIELD_LENGTH_MAP = null;
     }

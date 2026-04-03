@@ -42,9 +42,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const numRecordsLabel = document.querySelector('label[for="numRecords"]');
     const recordsHelp = document.getElementById('recordsHelp');
 
-    if (enablePaginationInput && numRecordsInput && numRecordsLabel && recordsHelp) {
+        if (enablePaginationInput && numRecordsInput && numRecordsLabel && recordsHelp) {
         enablePaginationInput.addEventListener('change', function() {
             const recordsPerPageGroup = document.getElementById('recordsPerPageGroup');
+            const useCopyGroup = document.getElementById('useCopyGroup');
             
             if (this.checked) {
                 // Update range for pagination mode using higher limits
@@ -55,6 +56,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 numRecordsInput.value = Math.max(Math.min(parseInt(numRecordsInput.value) || 100, paginationMax), paginationMin);
                 recordsHelp.textContent = `Range: ${paginationMin}-${paginationMax.toLocaleString()} | Default: 100`;
                 recordsPerPageGroup.style.display = 'flex';
+                if (useCopyGroup) {
+                    useCopyGroup.style.display = 'flex';
+                }
             } else {
                 // Restore original range and help text for regular mode
                 const regularMax = config ? config.limits.numRecords.max : 20000000;
@@ -62,6 +66,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 numRecordsInput.max = regularMax;
                 numRecordsInput.value = Math.min(parseInt(numRecordsInput.value) || 10, regularMax);
                 recordsPerPageGroup.style.display = 'none';
+                if (useCopyGroup) {
+                    useCopyGroup.style.display = 'none';
+                }
                 updateFormLimits(); // This will restore the original help text
                 currentSession = null; // Clear session when disabling pagination
             }
@@ -75,6 +82,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const enablePagination = document.getElementById('enablePagination').checked;
         const numRecordsValue = parseInt(document.getElementById('numRecords').value) || 0;
         
+        const useCopyEl = document.getElementById('useCopy');
         const formData = {
             numFields: parseInt(document.getElementById('numFields').value) || 0,
             numObjects: parseInt(document.getElementById('numObjects').value) || 0,
@@ -85,7 +93,8 @@ document.addEventListener('DOMContentLoaded', function() {
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
             storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
-            enablePagination: enablePagination
+            enablePagination: enablePagination,
+            useCopy: enablePagination && useCopyEl ? useCopyEl.checked : false
         };
 
         // Validate input using dynamic configuration
@@ -352,7 +361,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 generatedData = result.data;
                 currentSession = {
                     pagination: result.pagination,
-                    originalPayload: formData
+                    originalPayload: formData,
+                    useCopyMode: !!formData.useCopy,
+                    useCopySessionId: result.sessionId || null
                 };
                 
                 if (isLargeDataset) {
@@ -387,6 +398,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 ...currentSession.originalPayload,
                 pageNumber: pageNumber
             };
+            if (currentSession.useCopyMode && currentSession.useCopySessionId) {
+                pagePayload.sessionId = currentSession.useCopySessionId;
+                pagePayload.useCopy = true;
+            }
 
             const response = await fetch('/generate-paginated', {
                 method: 'POST',
@@ -400,6 +415,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (response.ok && result.success) {
                 generatedData = result.data;
                 currentSession.pagination = result.pagination;
+                if (result.sessionId) {
+                    currentSession.useCopySessionId = result.sessionId;
+                }
                 displayResult(generatedData, currentSession);
             } else {
                 showError(result.error || 'An error occurred while loading the page');
@@ -425,7 +443,9 @@ document.addEventListener('DOMContentLoaded', function() {
             // Show session info in result-stats
             const sessionInfo = document.getElementById('sessionInfo');
             if (sessionInfo) {
-                sessionInfo.textContent = 'Pagination: stateless (full params each request)';
+                sessionInfo.textContent = session.useCopyMode
+                    ? 'Pagination: useCopy (session cache + TTL; new uuid_1 per response)'
+                    : 'Pagination: stateless (full params each request)';
                 sessionInfo.style.display = 'inline';
             }
         } else {
@@ -717,6 +737,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const enablePagination = document.getElementById('enablePagination').checked;
         const numRecordsValue = parseInt(document.getElementById('numRecords').value) || 0;
         
+        const useCopyEl = document.getElementById('useCopy');
         return {
             numFields: parseInt(document.getElementById('numFields').value) || 0,
             numObjects: parseInt(document.getElementById('numObjects').value) || 0,
@@ -727,7 +748,8 @@ document.addEventListener('DOMContentLoaded', function() {
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
             storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
-            enablePagination: enablePagination
+            enablePagination: enablePagination,
+            useCopy: enablePagination && useCopyEl ? useCopyEl.checked : false
         };
     }
 
@@ -753,7 +775,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (formData.enablePagination) {
             params.append('enablePagination', 'true');
             params.append('recordsPerPage', formData.recordsPerPage);
-            params.append('pageNumber', '1');
+            const pageNum = currentSession && currentSession.pagination ? currentSession.pagination.currentPage : 1;
+            params.append('pageNumber', String(pageNum));
+            if (formData.useCopy) {
+                params.append('useCopy', 'true');
+                if (currentSession && currentSession.useCopySessionId) {
+                    params.append('sessionId', currentSession.useCopySessionId);
+                }
+            }
         }
 
         // Generate the GET cURL command
