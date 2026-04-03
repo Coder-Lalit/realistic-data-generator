@@ -499,8 +499,8 @@ async function handlePaginatedRequest(req, res) {
             paginationResponse.prevUrl = hasPreviousPage ? buildPaginationDataUrl(req, prevPageNumber) : null;
         }
 
-        if (LOG_DEBUG && currentPageNumber === totalPages) {
-            logger.debug(
+        if (currentPageNumber === totalPages) {
+            logger.info(
                 `Pagination complete: last page served (${totalPages} pages, ${effectiveTotalRecords} total records, ${recordsToGenerate} records this page)`
             );
         }
