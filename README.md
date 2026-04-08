@@ -16,8 +16,8 @@ A powerful Node.js application with a modern web UI for generating realistic JSO
 - **📄 Pagination Support**: Handle large datasets (10K+ records) with efficient pagination
 - **🎯 Smart Field Type Detection**: Intelligent handling of string vs non-string field types
 - **🧪 Comprehensive Testing**: Full test suite with validation for different data generation modes
-- **💾 MongoDB Storage**: Optional data persistence with automatic 24-hour TTL
-- **🔄 Environment Configuration**: Secure environment variable management for database connections
+- **🔄 useCopy (session cache)**: Optional in-memory pagination page cache with TTL (single server process)
+- **🔄 Environment Configuration**: Optional `.env` for port, logging, compression, and proxy settings
 
 ## 🚀 Quick Start
 
@@ -142,58 +142,9 @@ The system intelligently categorizes fields into:
 ]
 ```
 
-## 💾 MongoDB Storage
+## 💾 useCopy (in-memory session cache)
 
-The data generator supports **optional MongoDB storage** for persisting generated data. When enabled, data is automatically stored with a 24-hour TTL (Time To Live).
-
-### 🔧 Setup
-
-1. **Environment Configuration**: Create a `.env` file in the project root:
-   ```bash
-   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database?retryWrites=true&w=majority
-   ```
-
-2. **Automatic Connection**: The server automatically connects to MongoDB on startup if `MONGODB_URI` is configured
-
-3. **Graceful Fallback**: If MongoDB is unavailable, the server continues to work without storage functionality
-
-### 🎯 How It Works
-
-Add the `storeIt: true` parameter to any API request to enable storage:
-
-```javascript
-{
-  "numFields": 5,
-  "numRecords": 10,
-  "storeIt": true  // ← Enable MongoDB storage
-}
-```
-
-**Storage Features:**
-- **Automatic Indexing**: Session IDs are indexed for fast retrieval
-- **24-Hour TTL**: Data automatically expires after 24 hours
-- **Request Metadata**: Stores original request parameters alongside generated data
-- **Unique Session IDs**: Each storage operation gets a unique identifier
-- **Error Resilience**: Failed storage attempts don't affect API responses
-
-### 📊 Stored Data Structure
-
-```javascript
-{
-  "_id": "ObjectId(...)",
-  "sessionId": "data_1234567890_abc123def",
-  "requestParams": {
-    "numFields": 5,
-    "numObjects": 1,
-    "numNesting": 1,
-    "numRecords": 10,
-    "uniformFieldLength": true,
-    "storeIt": true
-  },
-  "data": [...], // The generated data array
-  "createdAt": "2024-01-01T12:00:00.000Z"
-}
-```
+For **paginated** generation, you can set **`useCopy: true`**. The server returns a **`sessionId`** and keeps each **page** of generated rows in **RAM** for about **10 minutes**. Repeat requests with the same `sessionId` and `pageNumber` reuse that snapshot and assign a new top-level **`uuid_1`**. This cache lives in the **current Node process only** (not shared across multiple app instances).
 
 ### API Endpoints
 
@@ -210,8 +161,7 @@ Content-Type: application/json
   "numNesting": 2,
   "numRecords": 10,
   "nestedFields": 3,
-  "uniformFieldLength": true,   // ← Enable Fixed Field Length Mode
-  "storeIt": true               // ← Enable MongoDB Storage
+  "uniformFieldLength": true   // ← Enable Fixed Field Length Mode
 }
 ```
 
@@ -234,8 +184,7 @@ Content-Type: application/json
   "numNesting": 2,
   "numRecords": 10,
   "nestedFields": 3,
-  "uniformFieldLength": false,  // ← Natural Length Mode (default)
-  "storeIt": false              // ← Disable MongoDB Storage (default)
+  "uniformFieldLength": false  // ← Natural Length Mode (default)
 }
 ```
 
@@ -247,7 +196,7 @@ Content-Type: application/json
 #### **GET Data Endpoint (URL parameters)**
 ```bash
 # Basic data generation
-GET /data?numFields=5&numObjects=0&numNesting=0&numRecords=100&nestedFields=0&uniformFieldLength=false&storeIt=false
+GET /data?numFields=5&numObjects=0&numNesting=0&numRecords=100&nestedFields=0&uniformFieldLength=false
 
 # Pagination (new session) - supports up to 100M records
 GET /data?numFields=5&numRecords=50000000&enablePagination=true&recordsPerPage=100
@@ -256,7 +205,7 @@ GET /data?numFields=5&numRecords=50000000&enablePagination=true&recordsPerPage=1
 GET /data?enablePagination=true&sessionId=session_1234567890_abc123&pageNumber=2
 
 # Boolean parameters
-GET /data?numFields=3&numRecords=10&uniformFieldLength=true&storeIt=true
+GET /data?numFields=3&numRecords=10&uniformFieldLength=true
 ```
 
 **Features:**
@@ -269,7 +218,7 @@ GET /data?numFields=3&numRecords=10&uniformFieldLength=true&storeIt=true
 
 **Parameter Types:**
 - **Integers**: `numFields`, `numObjects`, `numNesting`, `numRecords`, `nestedFields`, `recordsPerPage`, `pageNumber`
-- **Booleans**: `uniformFieldLength=true/false`, `storeIt=true/false`, `enablePagination=true/false`
+- **Booleans**: `uniformFieldLength=true/false`, `enablePagination=true/false`, `useCopy=true/false`
 - **Strings**: `sessionId`
 
 **Response:** Same as POST `/data` - returns array for regular requests or pagination object for paginated requests
@@ -287,7 +236,7 @@ Content-Type: application/json
   "nestedFields": 0,
   "uniformFieldLength": true,
   "recordsPerPage": 100,
-  "storeIt": true               // ← Store paginated data to MongoDB
+  "useCopy": true              // ← Optional in-memory page cache + sessionId
 }
 ```
 
@@ -410,8 +359,8 @@ All tests now include **Smart Field Type Detection**:
 ```
 data-generator-project/
 ├── package.json          # Project dependencies and scripts
-├── app.js                # Main Express server with Smart Field Detection & MongoDB
-├── .env                  # Environment variables (MONGODB_URI)
+├── app.js                # Main Express server with Smart Field Detection
+├── .env                  # Optional environment variables (PORT, LOG_LEVEL, etc.)
 ├── README.md             # Project documentation
 ├── public/               # Static files
 │   ├── index.html        # Main web interface
@@ -679,13 +628,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Added clear test reporting for validated vs skipped fields
 - ✅ Ensured data integrity across all generation modes
 
-**💾 MongoDB Storage Integration**
-- ✅ Added optional MongoDB data persistence with 24-hour TTL
-- ✅ Implemented secure environment variable configuration
-- ✅ Created automatic database connection with graceful fallback
-- ✅ Built session-based storage with unique identifiers
-- ✅ Added request metadata storage alongside generated data
-
 **🌐 GET API Endpoint**
 - ✅ Added GET `/data` endpoint with URL parameter support
 - ✅ Implemented automatic type conversion for query parameters
@@ -699,8 +641,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Added session management for pagination consistency
 - ✅ Implemented schema caching with automatic expiration
 - ✅ Enhanced error handling and validation
-- ✅ Added MongoDB integration with Mongoose ODM
-
 ### 🎯 Use Cases
 
 **Fixed Length Mode** - Perfect for:
@@ -715,19 +655,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 📈 Performance testing with real-world data patterns
 - 🎭 Demo data that looks genuinely authentic
 
-**MongoDB Storage** - Perfect for:
-- 💾 Persisting test data for repeated use across test runs
-- 📊 Audit trails of generated data for compliance testing
-- 🔄 Sharing generated datasets across development teams
-- 🕐 Time-based data retention with automatic cleanup
-- 📝 Storing data generation metadata for analysis
-
 ## 🙏 Acknowledgments
 
 - [Faker.js](https://fakerjs.dev/) for realistic data generation
 - [Express.js](https://expressjs.com/) for the web framework
-- [MongoDB](https://www.mongodb.com/) for flexible document database storage
-- [Mongoose](https://mongoosejs.com/) for elegant MongoDB object modeling
 - Modern CSS techniques for the beautiful UI
 - Test-driven development methodology for robust implementation
 

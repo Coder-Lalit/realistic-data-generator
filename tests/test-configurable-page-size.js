@@ -211,7 +211,8 @@ async function testConfigurablePageSize() {
                 totalRecords: test.totalRecords,
                 nestedFields: 0,
                 uniformFieldLength: false,
-                recordsPerPage: test.pageSize
+                recordsPerPage: test.pageSize,
+                useCopy: true
             };
 
             try {

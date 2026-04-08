@@ -368,13 +368,6 @@ button {
     font-weight: 500;
 }
 
-#storageInfo {
-    background: #dcfce7 !important;
-    color: #15803d !important;
-    border: 1px solid #22c55e;
-    font-weight: 600;
-}
-
 .json-container {
     background: #1f2937;
     border-radius: 10px;

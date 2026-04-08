@@ -91,7 +91,6 @@ document.addEventListener('DOMContentLoaded', function() {
             totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
-            storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
             enablePagination: enablePagination,
             useCopy: enablePagination && useCopyEl ? useCopyEl.checked : false
@@ -461,17 +460,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const jsonSize = new Blob([JSON.stringify(data)]).size;
         dataSize.textContent = formatBytes(jsonSize);
         
-        // Show MongoDB storage status if storeIt was enabled
-        const storageInfo = document.getElementById('storageInfo');
-        const storeItCheckbox = document.getElementById('storeIt');
-        if (storageInfo && storeItCheckbox && storeItCheckbox.checked) {
-            storageInfo.textContent = '💾 Stored to MongoDB';
-            storageInfo.style.display = 'inline';
-            storageInfo.style.color = '#22c55e'; // Green color for success
-        } else if (storageInfo) {
-            storageInfo.style.display = 'none';
-        }
-        
         // Handle pagination controls
         const paginationControls = document.getElementById('paginationControls');
         if (session && session.pagination) {
@@ -650,7 +638,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Uniform field length with large dataset
         if (formData.uniformFieldLength && numRecordsValue > 2000) {
-            warnings.push(`• Fixed field lengths with ${numRecordsValue.toLocaleString()} records requires extra processing.`);
+            warnings.push(`• Deterministic-seed mode with ${numRecordsValue.toLocaleString()} records may take longer to generate.`);
         }
 
         return warnings;
@@ -746,7 +734,6 @@ document.addEventListener('DOMContentLoaded', function() {
             totalRecords: enablePagination ? numRecordsValue : null,
             nestedFields: parseInt(document.getElementById('nestedFields').value) || 0,
             uniformFieldLength: document.getElementById('uniformFieldLength').checked,
-            storeIt: document.getElementById('storeIt').checked,
             recordsPerPage: enablePagination ? parseInt(document.getElementById('recordsPerPage').value) || 100 : undefined,
             enablePagination: enablePagination,
             useCopy: enablePagination && useCopyEl ? useCopyEl.checked : false
@@ -769,7 +756,6 @@ document.addEventListener('DOMContentLoaded', function() {
         params.append('numRecords', formData.enablePagination ? formData.totalRecords : formData.numRecords);
         params.append('nestedFields', formData.nestedFields);
         params.append('uniformFieldLength', formData.uniformFieldLength);
-        params.append('storeIt', formData.storeIt);
 
         // Add pagination parameters if enabled
         if (formData.enablePagination) {

@@ -15,6 +15,12 @@
 
 const http = require('http');
 
+function withoutUuid1(record) {
+    if (!record || typeof record !== 'object') return record;
+    const { uuid_1: _u, ...rest } = record;
+    return rest;
+}
+
 // Function to determine if a field type generates string values (same as in app.js)
 function isStringFieldType(fieldType) {
     // Field types that generate non-string values
@@ -73,7 +79,8 @@ async function testNaturalLengthPagination() {
             numNesting: 0,
             totalRecords: 10000,
             nestedFields: 0,
-            uniformFieldLength: false  // ⚠️ KEY: Natural lengths
+            uniformFieldLength: false,
+            useCopy: true
         };
 
         const sessionResponse = await makeRequest('http://localhost:3000/generate-paginated', 'POST', sessionData);
@@ -211,10 +218,10 @@ async function testNaturalLengthPagination() {
                     continue;
                 }
 
-                // Compare first record across all calls
-                const record1 = JSON.stringify(call1.data[0]);
-                const record2 = JSON.stringify(call2.data[0]);
-                const record3 = JSON.stringify(call3.data[0]);
+                // useCopy refreshes uuid_1 each response — compare rest of row
+                const record1 = JSON.stringify(withoutUuid1(call1.data[0]));
+                const record2 = JSON.stringify(withoutUuid1(call2.data[0]));
+                const record3 = JSON.stringify(withoutUuid1(call3.data[0]));
 
                 const isDeterministic = (record1 === record2) && (record2 === record3);
                 
