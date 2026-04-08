@@ -4,7 +4,7 @@
  * Seeded / uniformFieldLength pagination test (useCopy session)
  *
  * uniformFieldLength now only applies a deterministic Faker seed per layout — not fixed string widths.
- * Validates pagination, relative nextUrl, and useCopy cache stability (payload equal when ignoring uuid_1).
+ * Validates pagination, relative nextUrl, and useCopy: one snapshot per session (same rows for any pageNumber when ignoring uuid_1).
  *
  * Usage: node tests/test-fixed-length-pagination.js
  */
@@ -115,6 +115,20 @@ async function testFixedLengthPagination() {
         } else {
             throw new Error('useCopy cache: row mismatch when ignoring uuid_1');
         }
+
+        const altPage = Math.min(99, totalPages);
+        const p1Payload = { ...sessionData, sessionId, pageNumber: 1 };
+        const pAltPayload = { ...sessionData, sessionId, pageNumber: altPage };
+        const p1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', p1Payload);
+        const pAlt = await makeRequest('http://localhost:3000/generate-paginated', 'POST', pAltPayload);
+        if (!p1.success || !pAlt.success) {
+            throw new Error('Cross-page useCopy fetch failed');
+        }
+        const stripRows = (rows) => rows.map(withoutUuid1);
+        if (JSON.stringify(stripRows(p1.data)) !== JSON.stringify(stripRows(pAlt.data))) {
+            throw new Error('useCopy: page 1 vs other page should return same rows (ignoring uuid_1)');
+        }
+        console.log(`✅ Page 1 vs page ${altPage}: identical payload when ignoring uuid_1`);
 
         console.log();
         console.log('🏆 Seeded pagination test passed.');

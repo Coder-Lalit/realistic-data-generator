@@ -126,8 +126,8 @@ async function testNaturalLengthPagination() {
         }
         console.log();
 
-        // Step 3: Test multiple pages for natural variation
-        console.log('🔍 Step 3: Testing multiple pages for natural variation...');
+        // Step 3: useCopy repeats the same first-page slice for every pageNumber (sample field stats)
+        console.log('🔍 Step 3: Sampling multiple page indices (useCopy returns same slice each time)...');
         const pagesToTest = [1, 10, 25, 50, 75, 90, 100];
         const allFieldStats = {};
 
@@ -241,9 +241,9 @@ async function testNaturalLengthPagination() {
             }
         }
 
-        // Step 6: Cross-page variation check
+        // Step 6: useCopy — different pageNumber should still return the same row set (fresh uuid_1)
         console.log();
-        console.log('🌍 Step 6: Testing cross-page field variation...');
+        console.log('🌍 Step 6: Cross-page index (useCopy same slice)...');
         
         try {
             const page1Payload = { ...sessionData, sessionId: sessionId, pageNumber: 1 };
@@ -252,24 +252,10 @@ async function testNaturalLengthPagination() {
             const page50Response = await makeRequest('http://localhost:3000/generate-paginated', 'POST', page50Payload);
             
             if (page1Response.success && page50Response.success) {
-                const record1 = page1Response.data[0];
-                const record50 = page50Response.data[0];
-                
-                console.log('   Comparing field lengths across different pages:');
-                let hasVariation = false;
-                
-                for (const fieldName of Object.keys(record1)) {
-                    const len1 = String(record1[fieldName]).length;
-                    const len50 = String(record50[fieldName]).length;
-                    
-                    if (len1 !== len50) {
-                        hasVariation = true;
-                    }
-                    
-                    console.log(`     ${fieldName}: Page 1=${len1} chars, Page 50=${len50} chars ${len1 === len50 ? '(same)' : '(varies)'}`);
-                }
-                
-                console.log(`   ${hasVariation ? '🌿 Natural variation confirmed' : '⚠️ Unexpectedly consistent'}`);
+                const stripRows = (rows) => rows.map(withoutUuid1);
+                const sameSlice =
+                    JSON.stringify(stripRows(page1Response.data)) === JSON.stringify(stripRows(page50Response.data));
+                console.log(`   ${sameSlice ? '✅' : '❌'} Page 1 vs 50: ${sameSlice ? 'same rows when ignoring uuid_1 (expected)' : 'unexpected mismatch'}`);
             }
         } catch (error) {
             console.log(`   ❌ Cross-page test failed: ${error.message}`);
@@ -286,9 +272,9 @@ async function testNaturalLengthPagination() {
         console.log(`Determinism Test: ${determinismPassed ? '✅ PASSED' : '❌ FAILED'}`);
         
         if (determinismPassed) {
-            console.log('🏆 SUCCESS! Natural length pagination working correctly!');
-            console.log('✅ Same page returns identical data (deterministic)');
-            console.log('🌿 Field lengths vary naturally as expected');
+            console.log('🏆 SUCCESS! Natural length + useCopy working correctly!');
+            console.log('✅ Repeated requests return identical rows (ignoring uuid_1)');
+            console.log('🌿 Field lengths vary naturally within the cached slice');
             console.log('✅ No artificial length constraints applied');
         } else {
             console.log('🐛 ISSUE! Determinism test failed - same page returning different data');

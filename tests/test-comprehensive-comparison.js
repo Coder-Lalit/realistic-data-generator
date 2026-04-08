@@ -221,7 +221,7 @@ async function comprehensiveComparisonTest() {
         }
 
         console.log();
-        console.log('🌿 Natural Length - Field length variation across pages:');
+        console.log('🌿 Natural Length - useCopy returns same first-page slice for every page index:');
         const naturalPage1 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 1, sessionId: naturalLengthResponse.sessionId });
         const naturalPage50 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 50, sessionId: naturalLengthResponse.sessionId });
         const naturalPage100 = await makeRequest('http://localhost:3000/generate-paginated', 'POST', { ...baseConfig, uniformFieldLength: false, pageNumber: 100, sessionId: naturalLengthResponse.sessionId });
@@ -244,7 +244,7 @@ async function comprehensiveComparisonTest() {
                 const hasVariation = !((len1 === len50) && (len50 === len100));
                 if (hasVariation) naturalVariation = true;
                 
-                console.log(`   ${fieldName}: 🌿 ${len1}-${len50}-${len100} chars ${hasVariation ? '(natural variation)' : '(coincidentally same)'}`);
+                console.log(`   ${fieldName}: 🌿 ${len1}-${len50}-${len100} chars ${hasVariation ? '(unexpected mismatch)' : '(same slice — expected)'}`);
             } else {
                 console.log(`   ${fieldName}: ⏭️  Skipped (${fieldType} - non-string field)`);
             }
@@ -281,7 +281,7 @@ async function comprehensiveComparisonTest() {
         console.log(`   ⚡ Performance: ${fixedTime}ms`);
 
         console.log(`🌿 uniformFieldLength=false:`);
-        console.log(`   Cross-page variation: ${naturalVariation ? '🌿 observed' : 'mostly flat'}`);
+        console.log(`   Cross-page row lengths vs page index: ${naturalVariation ? 'inconsistent (bug)' : 'same slice (useCopy)'}`);
         console.log(`   useCopy cache (ignoring uuid_1): ${naturalDeterministic ? '✅ stable' : '❌ unstable'}`);
         console.log(`   ⚡ Performance: ${naturalTime}ms`);
 

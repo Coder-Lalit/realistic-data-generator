@@ -197,7 +197,8 @@ async function testConfigurablePageSize() {
         
         const navigationTests = [
             { pageSize: 25, totalRecords: 250, testPage: 5, expectedRecords: 25 },
-            { pageSize: 30, totalRecords: 100, testPage: 4, expectedRecords: 10 } // Last page with fewer records
+            // useCopy returns the first-page slice on every page; page index is only for pagination bounds
+            { pageSize: 30, totalRecords: 100, testPage: 4, expectedRecords: 30 }
         ];
 
         for (const test of navigationTests) {

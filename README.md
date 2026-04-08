@@ -16,7 +16,7 @@ A powerful Node.js application with a modern web UI for generating realistic JSO
 - **📄 Pagination Support**: Handle large datasets (10K+ records) with efficient pagination
 - **🎯 Smart Field Type Detection**: Intelligent handling of string vs non-string field types
 - **🧪 Comprehensive Testing**: Full test suite with validation for different data generation modes
-- **🔄 useCopy (session cache)**: Optional in-memory pagination page cache with TTL (single server process)
+- **🔄 useCopy (session cache)**: Optional in-memory snapshot of the first page per session + TTL (single server process); `pageNumber` only drives pagination bounds
 - **🔄 Environment Configuration**: Optional `.env` for port, logging, compression, and proxy settings
 
 ## 🚀 Quick Start
@@ -144,7 +144,7 @@ The system intelligently categorizes fields into:
 
 ## 💾 useCopy (in-memory session cache)
 
-For **paginated** generation, you can set **`useCopy: true`**. The server returns a **`sessionId`** and keeps each **page** of generated rows in **RAM** for about **10 minutes**. Repeat requests with the same `sessionId` and `pageNumber` reuse that snapshot and assign a new top-level **`uuid_1`**. This cache lives in the **current Node process only** (not shared across multiple app instances).
+For **paginated** generation, you can set **`useCopy: true`**. The server returns a **`sessionId`**, generates the **first page** of rows once (up to `recordsPerPage`, capped by `totalRecords`), and keeps that snapshot in **RAM** for about **10 minutes**. **Every** later request with the same `sessionId` returns **that same row set** with a new top-level **`uuid_1`**—even if `pageNumber` changes. **`pageNumber`** is only used for **pagination metadata** (`currentPage`, `totalPages`, `hasNextPage`, `nextUrl`) so clients know when to stop walking pages. This cache lives in the **current Node process only** (not shared across multiple app instances). Responses include **`X-UseCopy-Session-Cache: MISS`** on the first request for the session and **`HIT`** afterward.
 
 ### API Endpoints
 
@@ -236,7 +236,7 @@ Content-Type: application/json
   "nestedFields": 0,
   "uniformFieldLength": true,
   "recordsPerPage": 100,
-  "useCopy": true              // ← Optional in-memory page cache + sessionId
+  "useCopy": true              // ← Optional session snapshot (first page rows) + sessionId
 }
 ```
 

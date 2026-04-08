@@ -178,7 +178,7 @@ function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
     return `/data?${params.toString()}`;
 }
 
-// --- useCopy: in-memory session cache (TTL) — full generate once per page, then clone + fresh uuid_1 ----------
+// --- useCopy: in-memory session cache (TTL) — generate first-page slice once per session; clone + fresh uuid_1 on every response; pageNumber only bounds pagination (totalPages / nextUrl) ---
 const USE_COPY_TTL_MS = 10 * 60 * 1000;
 const USE_COPY_SESSION_CACHE = new Map();
 
@@ -201,7 +201,7 @@ function storeUseCopySession(sessionId, config) {
     USE_COPY_SESSION_CACHE.set(sessionId, {
         config,
         expiresAt: Date.now() + USE_COPY_TTL_MS,
-        responseCopyByPage: new Map()
+        responseCopySnapshot: null
     });
     logger.info(`useCopy session stored: ${sessionId.slice(-12)} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
 }
@@ -245,7 +245,7 @@ app.use(
         }
     })
 );
-app.use(cors());
+app.use(cors({ exposedHeaders: ['X-UseCopy-Session-Cache'] }));
 // JSON body limit for API clients (large POST bodies with options); override with JSON_BODY_LIMIT e.g. 50mb
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
@@ -300,8 +300,15 @@ app.get('/config', (req, res) => {
 });
 
 
+/** Positive integer page index for pagination bounds (useCopy ignores page for which rows are returned). */
+function parsePositivePageNumber(raw, defaultPage = 1) {
+    const n = parseInt(String(raw === undefined || raw === null || raw === '' ? defaultPage : raw), 10);
+    if (!Number.isFinite(n) || n < 1) return null;
+    return n;
+}
+
 // Function to handle paginated requests (shared by /data and /generate-paginated)
-// Default: stateless (full params each time). useCopy=true: session + TTL cache; repeat = clone + new uuid_1
+// Default: stateless (full params each time). useCopy=true: session + one snapshot + TTL; every response = clone + new uuid_1
 async function handlePaginatedRequest(req, res) {
     try {
         const body = req.body || {};
@@ -331,7 +338,12 @@ async function handlePaginatedRequest(req, res) {
             excludeEmoji
         } = body;
         const totalRec = totalRecords !== undefined ? totalRecords : body.numRecords;
-        const currentPageNumber = pageNumber || 1;
+        const currentPageNumber = parsePositivePageNumber(pageNumber, 1);
+        if (currentPageNumber === null) {
+            return res.status(400).json({
+                error: 'Invalid page number. Must be a positive integer.'
+            });
+        }
 
         logger.debug(
             `Paginated request: ${totalRec ?? 'default'} total records, ${numFields ?? 'default'} fields, page ${currentPageNumber}, uniform: ${!!uniformFieldLength}`
@@ -376,12 +388,6 @@ async function handlePaginatedRequest(req, res) {
         if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
             return res.status(400).json({
                 error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}`
-            });
-        }
-
-        if (currentPageNumber < 1) {
-            return res.status(400).json({
-                error: 'Invalid page number. Must be a positive integer.'
             });
         }
 
@@ -461,8 +467,10 @@ async function handlePaginatedRequest(req, res) {
 }
 
 async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
-    const pageNumber = body.pageNumber || 1;
-    const currentPageNumber = pageNumber;
+    const currentPageNumber = parsePositivePageNumber(body.pageNumber, 1);
+    if (currentPageNumber === null) {
+        return res.status(400).json({ error: 'Invalid page number. Must be a positive integer.' });
+    }
     const totalRec = body.totalRecords !== undefined ? body.totalRecords : body.numRecords;
 
     let sessionConfig;
@@ -511,10 +519,6 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
             });
         }
 
-        if (currentPageNumber < 1) {
-            return res.status(400).json({ error: 'Invalid page number. Must be a positive integer.' });
-        }
-
         sessionConfig = {
             numFields: finalNumFields,
             numObjects: finalNumObjects,
@@ -550,30 +554,31 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         });
     }
 
-    const startIndex = (currentPageNumber - 1) * effectivePageSize;
-    const endIndex = Math.min(startIndex + effectivePageSize, effectiveTotalRecords);
-    const recordsToGenerate = endIndex - startIndex;
+    const firstPageRecordCount = Math.min(effectivePageSize, effectiveTotalRecords);
 
     let data;
-    if (entry.responseCopyByPage && entry.responseCopyByPage.has(currentPageNumber)) {
-        data = applyFreshUuid1FromSnapshot(entry.responseCopyByPage.get(currentPageNumber));
+    let sessionSnapshotHit = false;
+    if (entry.responseCopySnapshot != null) {
+        sessionSnapshotHit = true;
+        data = applyFreshUuid1FromSnapshot(entry.responseCopySnapshot);
     } else {
         const { data: generated } = generateRealisticData(
             sessionConfig.numFields,
             sessionConfig.numObjects,
             sessionConfig.numNesting,
-            recordsToGenerate,
+            firstPageRecordCount,
             sessionConfig.nestedFields,
             sessionConfig.uniformFieldLength,
             sessionConfig.excludeEmoji
         );
         data = generated;
-        if (!entry.responseCopyByPage) {
-            entry.responseCopyByPage = new Map();
-        }
-        entry.responseCopyByPage.set(currentPageNumber, structuredClone(data));
+        entry.responseCopySnapshot = structuredClone(data);
         USE_COPY_SESSION_CACHE.set(finalSessionId, entry);
     }
+
+    const recordsInCurrentPage = data.length;
+
+    res.set('X-UseCopy-Session-Cache', sessionSnapshotHit ? 'HIT' : 'MISS');
 
     const hasNextPage = currentPageNumber < totalPages;
     const hasPreviousPage = currentPageNumber > 1;
@@ -586,7 +591,7 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         totalPages,
         totalRecords: effectiveTotalRecords,
         recordsPerPage: effectivePageSize,
-        recordsInCurrentPage: recordsToGenerate,
+        recordsInCurrentPage,
         hasNextPage,
         hasPreviousPage,
         nextPageNumber,
@@ -601,7 +606,7 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
 
     if (currentPageNumber === totalPages) {
         logger.info(
-            `Pagination complete: last page served (${totalPages} pages, ${effectiveTotalRecords} total records, ${recordsToGenerate} records this page) [useCopy]`
+            `Pagination complete: last page index reached (${totalPages} pages, ${effectiveTotalRecords} total records) [useCopy; same ${recordsInCurrentPage}-row payload every request]`
         );
     }
 
