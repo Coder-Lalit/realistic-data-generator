@@ -16,7 +16,7 @@ A powerful Node.js application with a modern web UI for generating realistic JSO
 - **📄 Pagination Support**: Handle large datasets (10K+ records) with efficient pagination
 - **🎯 Smart Field Type Detection**: Intelligent handling of string vs non-string field types
 - **🧪 Comprehensive Testing**: Full test suite with validation for different data generation modes
-- **🔄 useCopy (session cache)**: Optional in-memory snapshot of the first page per session + TTL (single server process); `pageNumber` only drives pagination bounds
+- **🔄 useCopy (session cache)**: Optional in-memory snapshot keyed by config (`numFields`, `numObjects`, `numNesting`, `nestedFields`, `recordsPerPage`, `totalRecords`/`numRecords`, plus `uniformFieldLength` & `excludeEmoji`); deterministic `sessionId`; `pageNumber` only drives pagination bounds
 - **🔄 Environment Configuration**: Optional `.env` for port, logging, compression, and proxy settings
 
 ## 🚀 Quick Start
@@ -144,7 +144,7 @@ The system intelligently categorizes fields into:
 
 ## 💾 useCopy (in-memory session cache)
 
-For **paginated** generation, you can set **`useCopy: true`**. The server returns a **`sessionId`**, generates the **first page** of rows once (up to `recordsPerPage`, capped by `totalRecords`), and keeps that snapshot in **RAM** for about **10 minutes**. **Every** later request with the same `sessionId` returns **that same row set** with a new top-level **`uuid_1`**—even if `pageNumber` changes. **`pageNumber`** is only used for **pagination metadata** (`currentPage`, `totalPages`, `hasNextPage`, `nextUrl`) so clients know when to stop walking pages. This cache lives in the **current Node process only** (not shared across multiple app instances). Responses include **`X-UseCopy-Session-Cache: MISS`** on the first request for the session and **`HIT`** afterward.
+For **paginated** generation, you can set **`useCopy: true`**. The cache key is a hash of **`numFields`**, **`numObjects`**, **`numNesting`**, **`nestedFields`**, **`recordsPerPage`**, **`totalRecords`** (or **`numRecords`**), **`uniformFieldLength`**, and **`excludeEmoji`**. Any client that sends the same values shares one snapshot (no random session required). The **`sessionId`** in responses is **deterministic** (`ucopy_` + hex) for that fingerprint. The server generates the **first page** of rows once (up to `recordsPerPage`, capped by `totalRecords`) and keeps it in **RAM** for about **10 minutes**. **Every** matching request returns **that same row set** with a new **`uuid_1`**. **`pageNumber`** only drives **pagination metadata** (`currentPage`, `totalPages`, `hasNextPage`, `nextUrl`). Wrong **`sessionId`** with a **different** config returns **400**. This cache lives in the **current Node process only** (not shared across instances). Responses include **`X-UseCopy-Session-Cache: MISS`** on first populate and **`HIT`** on reuse.
 
 ### API Endpoints
 

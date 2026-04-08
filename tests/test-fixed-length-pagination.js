@@ -85,6 +85,17 @@ async function testFixedLengthPagination() {
             throw new Error('Expected sessionId when useCopy is true');
         }
         console.log(`✅ Session: ${sessionId}`);
+
+        const dupConfigResponse = await makeRequest('http://localhost:3000/generate-paginated', 'POST', sessionData);
+        if (!dupConfigResponse.success) {
+            throw new Error(`Duplicate config request failed: ${dupConfigResponse.error}`);
+        }
+        if (dupConfigResponse.sessionId !== sessionId) {
+            throw new Error(
+                `Deterministic sessionId expected for same config: got ${dupConfigResponse.sessionId}, first ${sessionId}`
+            );
+        }
+        console.log('✅ Same config without sessionId → same sessionId (shared useCopy cache)');
         console.log(`📊 Total pages: ${totalPages} (${sessionResponse.pagination.totalRecords} records)`);
         console.log();
 

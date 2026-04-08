@@ -148,7 +148,7 @@ function stableSeedForUniformLength(numFields, numObjects, nestingLevel, nestedF
 
 /** Build query string for GET /data pagination next/prev links */
 function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
-    // useCopy: config lives in session — only sessionId + pageNumber are needed
+    // useCopy: sessionId is config-derived — minimal URLs use sessionId + pageNumber
     if (useCopyOpts?.sessionId) {
         const params = new URLSearchParams();
         params.set('sessionId', useCopyOpts.sessionId);
@@ -178,12 +178,91 @@ function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
     return `/data?${params.toString()}`;
 }
 
-// --- useCopy: in-memory session cache (TTL) — generate first-page slice once per session; clone + fresh uuid_1 on every response; pageNumber only bounds pagination (totalPages / nextUrl) ---
+// --- useCopy: in-memory cache (TTL) keyed by config fingerprint — same numFields/numObjects/... shares one snapshot; sessionId is deterministic ucopy_<hash> ---
 const USE_COPY_TTL_MS = 10 * 60 * 1000;
 const USE_COPY_SESSION_CACHE = new Map();
 
-function generateUseCopySessionId() {
-    return `ucopy_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+/** Fields that define generated shape; must stay in sync with parseValidatedUseCopySessionConfig. */
+function useCopyConfigFingerprint(config) {
+    return {
+        numFields: config.numFields,
+        numObjects: config.numObjects,
+        numNesting: config.numNesting,
+        nestedFields: config.nestedFields,
+        recordsPerPage: config.recordsPerPage,
+        totalRecords: config.totalRecords,
+        uniformFieldLength: !!config.uniformFieldLength,
+        excludeEmoji: !!config.excludeEmoji
+    };
+}
+
+function buildUseCopyCacheKeyFromConfig(config) {
+    const json = JSON.stringify(useCopyConfigFingerprint(config));
+    const h = crypto.createHash('sha256').update(json).digest('hex').slice(0, 16);
+    return `ucopy_${h}`;
+}
+
+function useCopyConfigsEqual(a, b) {
+    return JSON.stringify(useCopyConfigFingerprint(a)) === JSON.stringify(useCopyConfigFingerprint(b));
+}
+
+/** Build and validate pagination config from request body (defaults match stateless pagination). */
+function parseValidatedUseCopySessionConfig(body) {
+    const totalRec = body.totalRecords !== undefined ? body.totalRecords : body.numRecords;
+    const finalNumFields = body.numFields !== undefined ? body.numFields : CONFIG.limits.numFields.default;
+    const finalNumObjects = body.numObjects !== undefined ? body.numObjects : 0;
+    const finalNumNesting = body.numNesting !== undefined ? body.numNesting : 0;
+    const finalTotalRecords = totalRec !== undefined ? totalRec : CONFIG.limits.numRecords.default;
+    const finalNestedFields = body.nestedFields !== undefined ? body.nestedFields : 0;
+    const finalUniformLength = body.uniformFieldLength !== undefined ? body.uniformFieldLength : false;
+    const finalRecordsPerPage = body.recordsPerPage !== undefined ? body.recordsPerPage : 100;
+    const finalExcludeEmoji = body.excludeEmoji !== undefined ? body.excludeEmoji : false;
+
+    const limits = CONFIG.limits;
+    if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
+        return {
+            error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}`
+        };
+    }
+    if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
+        return {
+            error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}`
+        };
+    }
+    if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
+        return {
+            error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}`
+        };
+    }
+    if (finalTotalRecords < limits.totalRecordsPagination.min || finalTotalRecords > limits.totalRecordsPagination.max) {
+        return {
+            error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination`
+        };
+    }
+    if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
+        return {
+            error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}`
+        };
+    }
+    if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
+        return {
+            error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}`
+        };
+    }
+
+    return {
+        error: null,
+        config: {
+            numFields: finalNumFields,
+            numObjects: finalNumObjects,
+            numNesting: finalNumNesting,
+            totalRecords: finalTotalRecords,
+            nestedFields: finalNestedFields,
+            uniformFieldLength: finalUniformLength,
+            recordsPerPage: finalRecordsPerPage,
+            excludeEmoji: finalExcludeEmoji
+        }
+    };
 }
 
 function cleanExpiredUseCopySessionsMemory() {
@@ -203,7 +282,7 @@ function storeUseCopySession(sessionId, config) {
         expiresAt: Date.now() + USE_COPY_TTL_MS,
         responseCopySnapshot: null
     });
-    logger.info(`useCopy session stored: ${sessionId.slice(-12)} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
+    logger.info(`useCopy cache key stored: ${sessionId} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
 }
 
 function getUseCopySession(sessionId) {
@@ -471,78 +550,34 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
     if (currentPageNumber === null) {
         return res.status(400).json({ error: 'Invalid page number. Must be a positive integer.' });
     }
-    const totalRec = body.totalRecords !== undefined ? body.totalRecords : body.numRecords;
 
-    let sessionConfig;
-    let entry = null;
-    let finalSessionId = existingSessionId;
-
-    if (!existingSessionId) {
-        const finalNumFields = body.numFields !== undefined ? body.numFields : CONFIG.limits.numFields.default;
-        const finalNumObjects = body.numObjects !== undefined ? body.numObjects : 0;
-        const finalNumNesting = body.numNesting !== undefined ? body.numNesting : 0;
-        const finalTotalRecords = totalRec !== undefined ? totalRec : CONFIG.limits.numRecords.default;
-        const finalNestedFields = body.nestedFields !== undefined ? body.nestedFields : 0;
-        const finalUniformLength = body.uniformFieldLength !== undefined ? body.uniformFieldLength : false;
-        const finalRecordsPerPage = body.recordsPerPage !== undefined ? body.recordsPerPage : 100;
-        const finalExcludeEmoji = body.excludeEmoji !== undefined ? body.excludeEmoji : false;
-
-        const limits = CONFIG.limits;
-        if (finalNumFields < limits.numFields.min || finalNumFields > limits.numFields.max) {
-            return res.status(400).json({
-                error: `Number of fields must be between ${limits.numFields.min} and ${limits.numFields.max}`
-            });
-        }
-        if (finalNumObjects < limits.numObjects.min || finalNumObjects > limits.numObjects.max) {
-            return res.status(400).json({
-                error: `Number of objects must be between ${limits.numObjects.min} and ${limits.numObjects.max}`
-            });
-        }
-        if (finalNumNesting < limits.numNesting.min || finalNumNesting > limits.numNesting.max) {
-            return res.status(400).json({
-                error: `Nesting depth must be between ${limits.numNesting.min} and ${limits.numNesting.max}`
-            });
-        }
-        if (finalTotalRecords < limits.totalRecordsPagination.min || finalTotalRecords > limits.totalRecordsPagination.max) {
-            return res.status(400).json({
-                error: `Total records must be between ${limits.totalRecordsPagination.min} and ${limits.totalRecordsPagination.max.toLocaleString()} for pagination`
-            });
-        }
-        if (finalNestedFields < limits.nestedFields.min || finalNestedFields > limits.nestedFields.max) {
-            return res.status(400).json({
-                error: `Number of nested fields must be between ${limits.nestedFields.min} and ${limits.nestedFields.max}`
-            });
-        }
-        if (finalRecordsPerPage < limits.recordsPerPage.min || finalRecordsPerPage > limits.recordsPerPage.max) {
-            return res.status(400).json({
-                error: `Records per page must be between ${limits.recordsPerPage.min} and ${limits.recordsPerPage.max}`
-            });
-        }
-
-        sessionConfig = {
-            numFields: finalNumFields,
-            numObjects: finalNumObjects,
-            numNesting: finalNumNesting,
-            totalRecords: finalTotalRecords,
-            nestedFields: finalNestedFields,
-            uniformFieldLength: finalUniformLength,
-            recordsPerPage: finalRecordsPerPage,
-            excludeEmoji: finalExcludeEmoji
-        };
-
-        finalSessionId = generateUseCopySessionId();
-        storeUseCopySession(finalSessionId, sessionConfig);
-        entry = getUseCopySession(finalSessionId);
-    } else {
-        entry = getUseCopySession(existingSessionId);
-        if (!entry) {
-            return res.status(404).json({
-                error: 'useCopy session not found or expired. Start again with useCopy=true and no sessionId.'
-            });
-        }
-        sessionConfig = entry.config;
-        finalSessionId = existingSessionId;
+    const parsed = parseValidatedUseCopySessionConfig(body);
+    if (parsed.error) {
+        return res.status(400).json({ error: parsed.error });
     }
+    const sessionConfig = parsed.config;
+    const cacheKey = buildUseCopyCacheKeyFromConfig(sessionConfig);
+
+    let entry = null;
+    if (existingSessionId) {
+        entry = getUseCopySession(existingSessionId);
+        if (entry && !useCopyConfigsEqual(entry.config, sessionConfig)) {
+            return res.status(400).json({
+                error: 'sessionId does not match the provided configuration'
+            });
+        }
+    }
+
+    if (!entry) {
+        entry = getUseCopySession(cacheKey);
+    }
+
+    if (!entry) {
+        storeUseCopySession(cacheKey, sessionConfig);
+        entry = getUseCopySession(cacheKey);
+    }
+
+    const finalSessionId = cacheKey;
 
     const effectivePageSize = sessionConfig.recordsPerPage;
     const effectiveTotalRecords = sessionConfig.totalRecords;
@@ -573,7 +608,7 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
         );
         data = generated;
         entry.responseCopySnapshot = structuredClone(data);
-        USE_COPY_SESSION_CACHE.set(finalSessionId, entry);
+        USE_COPY_SESSION_CACHE.set(cacheKey, entry);
     }
 
     const recordsInCurrentPage = data.length;
