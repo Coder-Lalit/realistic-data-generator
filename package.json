@@ -5,6 +5,7 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
+    "start:cluster": "node cluster.js",
     "dev": "nodemon app.js",
     "test": "node tests/run-all-tests.js",
     "test:fixed": "node tests/test-fixed-length-pagination.js",

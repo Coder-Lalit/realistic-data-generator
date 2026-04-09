@@ -520,6 +520,7 @@ nanoid_81 → color_82 → hexColor_83 → number_84 → boolean_85 → imei_86 
 - **Port**: Default 3000 (configurable via `PORT` environment variable)
 - **CORS**: Enabled for cross-origin requests
 - **ACCESS_LOG**: `true` / `1` logs every request (status, method, URL, duration); `false` / `0` turns that off. Default is **on** when `NODE_ENV` is not `production` (so local `npm start` shows `/data` traffic). Static assets like `.js` / `.css` are skipped to reduce noise.
+- **Multi-worker (Node cluster)**: `npm run start:cluster` runs `cluster.js`, which forks **`WEB_CONCURRENCY`** workers (or **`CLUSTER_WORKERS`**, default = CPU count, max 32). All workers share **`PORT`**. Use **`REDIS_URL`** with **useCopy** so cache is shared across workers; without Redis, useCopy is still per-process. **`npm start`** remains a **single** process.
 
 ### Validation Limits
 - Fields: 1+ (no upper limit)

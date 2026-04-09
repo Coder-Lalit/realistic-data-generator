@@ -1,3 +1,4 @@
+const cluster = require('cluster');
 const express = require('express');
 const compression = require('compression');
 const crypto = require('crypto');
@@ -1463,7 +1464,8 @@ function generateFieldValue(fieldType) {
 }
 
 app.listen(PORT, () => {
-    logger.info(`Data Generator Server running on http://localhost:${PORT}`);
+    const workerTag = cluster.isWorker ? ` worker pid=${process.pid}` : '';
+    logger.info(`Data Generator Server running on http://localhost:${PORT}${workerTag}`);
     logger.info(`Log level: ${Object.keys(LOG_LEVELS).find(key => LOG_LEVELS[key] === CURRENT_LOG_LEVEL)}`);
     if (isAccessLogEnabled()) {
         logger.info(
