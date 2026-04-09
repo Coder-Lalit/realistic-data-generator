@@ -333,12 +333,39 @@ app.use(cors({ exposedHeaders: ['X-UseCopy-Session-Cache'] }));
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
-// Log any response status other than 200 (3xx cache/redirect, 4xx client, 5xx server, etc.)
+/** Every request + status + duration. On when ACCESS_LOG=1/true, off when ACCESS_LOG=0/false, default on unless NODE_ENV=production. */
+function isAccessLogEnabled() {
+    const v = process.env.ACCESS_LOG;
+    if (v === '1' || v === 'true') return true;
+    if (v === '0' || v === 'false') return false;
+    return process.env.NODE_ENV !== 'production';
+}
+
+function shouldSkipAccessLog(req) {
+    if (req.method !== 'GET') return false;
+    const p = req.path || '';
+    return /\.(js|mjs|css|ico|png|jpg|jpeg|gif|svg|webp|woff2?|map)$/i.test(p);
+}
+
+// HTTP access / error line logging (200s were previously silent at INFO)
 app.use((req, res, next) => {
+    const t0 = Date.now();
     res.on('finish', () => {
         const code = res.statusCode;
+        const url = req.originalUrl || req.url;
+        const line = `${code} ${req.method} ${url}`;
+
+        if (isAccessLogEnabled()) {
+            if (!shouldSkipAccessLog(req)) {
+                const ms = Date.now() - t0;
+                if (code >= 500) logger.error(`${line} ${ms}ms`);
+                else if (code >= 400) logger.warn(`${line} ${ms}ms`);
+                else logger.info(`${line} ${ms}ms`);
+            }
+            return;
+        }
+
         if (code === 200) return;
-        const line = `${code} ${req.method} ${req.originalUrl || req.url}`;
         if (code >= 500) logger.error(line);
         else if (code >= 400) logger.warn(line);
         else logger.info(line);
@@ -1438,7 +1465,14 @@ function generateFieldValue(fieldType) {
 app.listen(PORT, () => {
     logger.info(`Data Generator Server running on http://localhost:${PORT}`);
     logger.info(`Log level: ${Object.keys(LOG_LEVELS).find(key => LOG_LEVELS[key] === CURRENT_LOG_LEVEL)}`);
-    
+    if (isAccessLogEnabled()) {
+        logger.info(
+            'HTTP access log: status + method + URL + duration per request (static .js/.css skipped). Set ACCESS_LOG=false or NODE_ENV=production to log errors only.'
+        );
+    } else {
+        logger.info('HTTP access log: disabled for successful responses; non-2xx still logged. Set ACCESS_LOG=true to log all.');
+    }
+
     // Start health check ping every 5 minutes to keep app alive
     setInterval(() => {
         const options = {

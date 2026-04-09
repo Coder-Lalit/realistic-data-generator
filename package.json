@@ -11,7 +11,8 @@
     "test:natural": "node tests/test-natural-length-pagination.js",
     "test:compare": "node tests/test-comprehensive-comparison.js",
     "test:pagesize": "node tests/test-configurable-page-size.js",
-    "test:fieldlength": "node tests/test-field-length-validation.js"
+    "test:fieldlength": "node tests/test-field-length-validation.js",
+    "test:concurrent": "node tests/test-concurrent-usecopy-pagination.js"
   },
   "keywords": [
     "data-generator",
