@@ -443,7 +443,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const sessionInfo = document.getElementById('sessionInfo');
             if (sessionInfo) {
                 sessionInfo.textContent = session.useCopyMode
-                    ? 'Pagination: useCopy (one cached slice per session; page index only for next/prev; new uuid_1 per response)'
+                    ? 'Pagination: useCopy (one template row per config; page = clones + uuid_1; page index for next/prev only)'
                     : 'Pagination: stateless (full params each request)';
                 sessionInfo.style.display = 'inline';
             }

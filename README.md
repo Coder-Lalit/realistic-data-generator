@@ -16,7 +16,7 @@ A powerful Node.js application with a modern web UI for generating realistic JSO
 - **📄 Pagination Support**: Handle large datasets (10K+ records) with efficient pagination
 - **🎯 Smart Field Type Detection**: Intelligent handling of string vs non-string field types
 - **🧪 Comprehensive Testing**: Full test suite with validation for different data generation modes
-- **🔄 useCopy (session cache)**: Optional in-memory snapshot keyed by config (`numFields`, `numObjects`, `numNesting`, `nestedFields`, `recordsPerPage`, `totalRecords`/`numRecords`, plus `uniformFieldLength` & `excludeEmoji`); deterministic `sessionId`; `pageNumber` only drives pagination bounds
+- **🔄 useCopy (session cache)**: One **template row** per config fingerprint; each response builds the page as **N clones** with new **`uuid_1`** (tiny Redis footprint). Optional **`REDIS_URL`** for multi-instance; otherwise in-memory. Parallel first requests coordinate with a **Redis lock** (wait/retry; rare **503** if generation is slow). Deterministic **`sessionId`**; **`pageNumber`** only drives pagination bounds
 - **🔄 Environment Configuration**: Optional `.env` for port, logging, compression, and proxy settings
 
 ## 🚀 Quick Start
@@ -142,9 +142,15 @@ The system intelligently categorizes fields into:
 ]
 ```
 
-## 💾 useCopy (in-memory session cache)
+## 💾 useCopy (template row + optional Redis)
 
-For **paginated** generation, you can set **`useCopy: true`**. The cache key is a hash of **`numFields`**, **`numObjects`**, **`numNesting`**, **`nestedFields`**, **`recordsPerPage`**, **`totalRecords`** (or **`numRecords`**), **`uniformFieldLength`**, and **`excludeEmoji`**. Any client that sends the same values shares one snapshot (no random session required). The **`sessionId`** in responses is **deterministic** (`ucopy_` + hex) for that fingerprint. The server generates the **first page** of rows once (up to `recordsPerPage`, capped by `totalRecords`) and keeps it in **RAM** for about **10 minutes**. **Every** matching request returns **that same row set** with a new **`uuid_1`**. **`pageNumber`** only drives **pagination metadata** (`currentPage`, `totalPages`, `hasNextPage`, `nextUrl`). Wrong **`sessionId`** with a **different** config returns **400**. This cache lives in the **current Node process only** (not shared across instances). Responses include **`X-UseCopy-Session-Cache: MISS`** on first populate and **`HIT`** on reuse.
+For **paginated** generation, you can set **`useCopy: true`**. The cache key is a hash of **`numFields`**, **`numObjects`**, **`numNesting`**, **`nestedFields`**, **`recordsPerPage`**, **`totalRecords`** (or **`numRecords`**), **`uniformFieldLength`**, and **`excludeEmoji`**. The server stores **one generated row** per key (small in Redis or RAM). Each response returns **`min(recordsPerPage, totalRecords)`** rows by **cloning that template** with a new **`uuid_1`** per row (same field values across rows except UUIDs). The **`sessionId`** in responses is **deterministic** (`ucopy_` + hex). **`pageNumber`** only drives **pagination metadata** (`currentPage`, `totalPages`, `hasNextPage`, `nextUrl`). Wrong **`sessionId`** vs body config returns **400**.
+
+**Without `REDIS_URL`:** in-process cache (~10 minute TTL). **With `REDIS_URL`:** shared template for **cluster / multiple instances**. Parallel first hits use a **Redis lock**; waiters **poll** until the template exists, or get **503** *retry shortly* if `USE_COPY_LOCK_WAIT_MS` elapses.
+
+Optional env: `USE_COPY_REDIS_TTL_SEC` (default `600`, sliding window—each **hit** refreshes template + config expiry by this many seconds), `USE_COPY_LOCK_SEC` (default `45`), `USE_COPY_LOCK_WAIT_MS` (default `20000`), `USE_COPY_LOCK_POLL_MS` (default `50`). **`GET /ping`** includes `useCopyStore`, `useCopyRedisConfigured`, `useCopyRedisConnected`.
+
+Responses include **`X-UseCopy-Session-Cache: MISS`** on first populate and **`HIT`** on reuse.
 
 ### API Endpoints
 

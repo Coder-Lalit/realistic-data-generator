@@ -7,6 +7,8 @@ const path = require('path');
 const http = require('http');
 require('dotenv').config();
 
+const useCopyRedis = require('./use-copy-redis');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -178,7 +180,7 @@ function buildPaginationDataUrl(req, pageNum, useCopyOpts = null) {
     return `/data?${params.toString()}`;
 }
 
-// --- useCopy: in-memory cache (TTL) keyed by config fingerprint — same numFields/numObjects/... shares one snapshot; sessionId is deterministic ucopy_<hash> ---
+// --- useCopy: Redis (REDIS_URL) = one row template + TTL + lock; else in-memory. Page = N clones with fresh uuid_1. sessionId = deterministic ucopy_<hash> ---
 const USE_COPY_TTL_MS = 10 * 60 * 1000;
 const USE_COPY_SESSION_CACHE = new Map();
 
@@ -280,7 +282,7 @@ function storeUseCopySession(sessionId, config) {
     USE_COPY_SESSION_CACHE.set(sessionId, {
         config,
         expiresAt: Date.now() + USE_COPY_TTL_MS,
-        responseCopySnapshot: null
+        responseCopyTemplate: null
     });
     logger.info(`useCopy cache key stored: ${sessionId} (TTL ${USE_COPY_TTL_MS / 60000}min)`);
 }
@@ -300,13 +302,15 @@ function getUseCopySession(sessionId) {
     return entry;
 }
 
-/** Deep clone rows and assign new top-level uuid_1 */
-function applyFreshUuid1FromSnapshot(snapshot) {
-    const data = structuredClone(snapshot);
-    for (const row of data) {
+/** Build a page by cloning one template row `count` times with a new uuid_1 each. */
+function pageDataFromSingleRowTemplate(templateRow, count) {
+    const data = [];
+    for (let i = 0; i < count; i++) {
+        const row = structuredClone(templateRow);
         if (row && typeof row === 'object' && Object.prototype.hasOwnProperty.call(row, 'uuid_1')) {
             row.uuid_1 = crypto.randomUUID();
         }
+        data.push(row);
     }
     return data;
 }
@@ -345,8 +349,10 @@ app.use((req, res, next) => {
 app.use(express.static('public'));
 
 // Health check endpoint for keep-alive and monitoring
-app.get('/ping', (req, res) => {
+app.get('/ping', async (req, res) => {
     const activeSessions = USE_COPY_SESSION_CACHE.size;
+    const redisConfigured = useCopyRedis.isConfigured();
+    const redisConnected = redisConfigured && (await useCopyRedis.isReady());
     const status = {
         success: true,
         message: 'pong',
@@ -357,7 +363,9 @@ app.get('/ping', (req, res) => {
         memory: process.memoryUsage(),
         version: '1.0.0',
         environment: process.env.NODE_ENV || 'development',
-        useCopyStore: 'memory',
+        useCopyStore: redisConnected ? 'redis' : 'memory',
+        useCopyRedisConfigured: redisConfigured,
+        useCopyRedisConnected: redisConnected,
         activeSessions
     };
 
@@ -387,7 +395,7 @@ function parsePositivePageNumber(raw, defaultPage = 1) {
 }
 
 // Function to handle paginated requests (shared by /data and /generate-paginated)
-// Default: stateless (full params each time). useCopy=true: session + one snapshot + TTL; every response = clone + new uuid_1
+// Default: stateless (full params each time). useCopy=true: one template row + TTL (Redis or memory); page = N clones + new uuid_1 each
 async function handlePaginatedRequest(req, res) {
     try {
         const body = req.body || {};
@@ -397,8 +405,15 @@ async function handlePaginatedRequest(req, res) {
             body.sessionId && String(body.sessionId).trim() !== '' ? String(body.sessionId).trim() : null;
 
         let useCopy = useCopyFlag;
-        if (!useCopy && existingUseCopySessionId && getUseCopySession(existingUseCopySessionId)) {
-            useCopy = true;
+        if (!useCopy && existingUseCopySessionId) {
+            if (getUseCopySession(existingUseCopySessionId)) {
+                useCopy = true;
+            } else if (await useCopyRedis.isReady()) {
+                const rc = await useCopyRedis.getConfig(existingUseCopySessionId);
+                if (rc) {
+                    useCopy = true;
+                }
+            }
         }
 
         if (useCopy) {
@@ -558,23 +573,33 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
     const sessionConfig = parsed.config;
     const cacheKey = buildUseCopyCacheKeyFromConfig(sessionConfig);
 
-    let entry = null;
-    if (existingSessionId) {
-        entry = getUseCopySession(existingSessionId);
-        if (entry && !useCopyConfigsEqual(entry.config, sessionConfig)) {
-            return res.status(400).json({
-                error: 'sessionId does not match the provided configuration'
-            });
+    const redisOk = await useCopyRedis.isReady();
+
+    if (redisOk) {
+        if (existingSessionId && existingSessionId !== cacheKey) {
+            const remoteCfg = await useCopyRedis.getConfig(existingSessionId);
+            if (!remoteCfg || !useCopyConfigsEqual(remoteCfg, sessionConfig)) {
+                return res.status(400).json({
+                    error: 'sessionId does not match the provided configuration'
+                });
+            }
         }
-    }
-
-    if (!entry) {
-        entry = getUseCopySession(cacheKey);
-    }
-
-    if (!entry) {
-        storeUseCopySession(cacheKey, sessionConfig);
-        entry = getUseCopySession(cacheKey);
+    } else {
+        let entry = null;
+        if (existingSessionId) {
+            entry = getUseCopySession(existingSessionId);
+            if (entry && !useCopyConfigsEqual(entry.config, sessionConfig)) {
+                return res.status(400).json({
+                    error: 'sessionId does not match the provided configuration'
+                });
+            }
+        }
+        if (!entry) {
+            entry = getUseCopySession(cacheKey);
+        }
+        if (!entry) {
+            storeUseCopySession(cacheKey, sessionConfig);
+        }
     }
 
     const finalSessionId = cacheKey;
@@ -593,22 +618,70 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
 
     let data;
     let sessionSnapshotHit = false;
-    if (entry.responseCopySnapshot != null) {
-        sessionSnapshotHit = true;
-        data = applyFreshUuid1FromSnapshot(entry.responseCopySnapshot);
+
+    if (redisOk) {
+        let tmpl;
+        try {
+            tmpl = await useCopyRedis.getOrCreateTemplateRow(sessionConfig, cacheKey, () => {
+                const { data: generated } = generateRealisticData(
+                    sessionConfig.numFields,
+                    sessionConfig.numObjects,
+                    sessionConfig.numNesting,
+                    1,
+                    sessionConfig.nestedFields,
+                    sessionConfig.uniformFieldLength,
+                    sessionConfig.excludeEmoji
+                );
+                return generated[0];
+            });
+        } catch (e) {
+            logger.error(`useCopy Redis template error: ${e.message}`);
+            return res.status(503).json({
+                success: false,
+                error: 'useCopy cache temporarily unavailable; retry shortly.'
+            });
+        }
+
+        if (tmpl.error === 'lock_wait_timeout') {
+            return res.status(503).json({
+                success: false,
+                error: 'useCopy template is being generated; retry shortly.'
+            });
+        }
+        if (tmpl.error === 'redis_unavailable' || !tmpl.row) {
+            return res.status(503).json({
+                success: false,
+                error: 'useCopy cache temporarily unavailable; retry shortly.'
+            });
+        }
+
+        sessionSnapshotHit = tmpl.hit;
+        data = pageDataFromSingleRowTemplate(tmpl.row, firstPageRecordCount);
     } else {
-        const { data: generated } = generateRealisticData(
-            sessionConfig.numFields,
-            sessionConfig.numObjects,
-            sessionConfig.numNesting,
-            firstPageRecordCount,
-            sessionConfig.nestedFields,
-            sessionConfig.uniformFieldLength,
-            sessionConfig.excludeEmoji
-        );
-        data = generated;
-        entry.responseCopySnapshot = structuredClone(data);
-        USE_COPY_SESSION_CACHE.set(cacheKey, entry);
+        let entry = getUseCopySession(cacheKey);
+        if (!entry) {
+            storeUseCopySession(cacheKey, sessionConfig);
+            entry = getUseCopySession(cacheKey);
+        }
+
+        if (entry.responseCopyTemplate != null) {
+            sessionSnapshotHit = true;
+            data = pageDataFromSingleRowTemplate(entry.responseCopyTemplate, firstPageRecordCount);
+        } else {
+            const { data: generated } = generateRealisticData(
+                sessionConfig.numFields,
+                sessionConfig.numObjects,
+                sessionConfig.numNesting,
+                1,
+                sessionConfig.nestedFields,
+                sessionConfig.uniformFieldLength,
+                sessionConfig.excludeEmoji
+            );
+            entry.responseCopyTemplate = structuredClone(generated[0]);
+            USE_COPY_SESSION_CACHE.set(cacheKey, entry);
+            sessionSnapshotHit = false;
+            data = pageDataFromSingleRowTemplate(entry.responseCopyTemplate, firstPageRecordCount);
+        }
     }
 
     const recordsInCurrentPage = data.length;
@@ -641,7 +714,7 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
 
     if (currentPageNumber === totalPages) {
         logger.info(
-            `Pagination complete: last page index reached (${totalPages} pages, ${effectiveTotalRecords} total records) [useCopy; same ${recordsInCurrentPage}-row payload every request]`
+            `Pagination complete: last page index reached (${totalPages} pages, ${effectiveTotalRecords} total records) [useCopy; ${recordsInCurrentPage} rows from one template + fresh uuid_1]`
         );
     }
 
@@ -702,14 +775,19 @@ app.get('/data', async (req, res) => {
         const trimmedSessionId =
             querySessionId && String(querySessionId).trim() !== '' ? String(querySessionId).trim() : null;
         if (trimmedSessionId) {
-            const entry = getUseCopySession(trimmedSessionId);
-            if (!entry) {
+            let cfg = null;
+            const memEntry = getUseCopySession(trimmedSessionId);
+            if (memEntry) {
+                cfg = memEntry.config;
+            } else if (await useCopyRedis.isReady()) {
+                cfg = await useCopyRedis.getConfig(trimmedSessionId);
+            }
+            if (!cfg) {
                 return res.status(404).json({
                     success: false,
                     error: 'useCopy session not found or expired. Start again with useCopy=true and no sessionId.'
                 });
             }
-            const cfg = entry.config;
             const pageNum = parsedParams.pageNumber || 1;
             mockReq.body = {
                 numFields: cfg.numFields,
