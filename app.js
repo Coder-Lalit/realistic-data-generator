@@ -52,6 +52,14 @@ const logger = {
     }
 };
 
+/** When running under cluster.js, append worker id so logs can be correlated across processes. */
+function clusterWorkerIdSuffix() {
+    if (cluster.isWorker && cluster.worker) {
+        return ` clusterWorkerId=${cluster.worker.id}`;
+    }
+    return '';
+}
+
 // Configurable limits
 const CONFIG = {
     limits: {
@@ -574,7 +582,7 @@ async function handlePaginatedRequest(req, res) {
 
         if (currentPageNumber === totalPages) {
             logger.info(
-                `Pagination complete: last page served (${totalPages} pages, ${effectiveTotalRecords} total records, ${recordsToGenerate} records this page)`
+                `Pagination complete: last page served (${totalPages} pages, ${effectiveTotalRecords} total records, ${recordsToGenerate} records this page)${clusterWorkerIdSuffix()}`
             );
         }
 
@@ -742,7 +750,7 @@ async function handlePaginatedUseCopy(req, res, body, existingSessionId) {
 
     if (currentPageNumber === totalPages) {
         logger.info(
-            `Pagination complete: last page index reached (${totalPages} pages, ${effectiveTotalRecords} total records) [useCopy; ${recordsInCurrentPage} rows from one template + fresh uuid_1]`
+            `Pagination complete: last page index reached (${totalPages} pages, ${effectiveTotalRecords} total records) [useCopy; ${recordsInCurrentPage} rows from one template + fresh uuid_1]${clusterWorkerIdSuffix()}`
         );
     }
 
@@ -1464,7 +1472,7 @@ function generateFieldValue(fieldType) {
 }
 
 app.listen(PORT, () => {
-    const workerTag = cluster.isWorker ? ` worker pid=${process.pid}` : '';
+    const workerTag = cluster.isWorker ? ` worker pid=${process.pid}${clusterWorkerIdSuffix()}` : '';
     logger.info(`Data Generator Server running on http://localhost:${PORT}${workerTag}`);
     logger.info(`Log level: ${Object.keys(LOG_LEVELS).find(key => LOG_LEVELS[key] === CURRENT_LOG_LEVEL)}`);
     if (isAccessLogEnabled()) {

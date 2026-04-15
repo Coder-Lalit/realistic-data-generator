@@ -12,16 +12,24 @@
  *   USE_COPY_LOCK_WAIT  max 503 retries per request (default 30)
  *   TEST_NUM_RECORDS        optional — override numRecords for a shorter run (e.g. 500 → 5 pages)
  *   CONCURRENT_PROGRESS_PAGES  log every N OK pages per user (default 50; set 0 to disable)
+ *   CONCURRENT_OUTPUT     set 0/false to skip writing files (default: save responses)
+ *   CONCURRENT_OUT_DIR    root folder for runs (default: <project>/outPut)
  *
  * Usage: server must be running — npm run test:concurrent
+ * Responses: outPut/<run-timestamp>/meta.json and user-<id>/<NNNNN>-<status>.json per HTTP response.
  * Note: default numRecords=100000 → 1000 pages per user (heavy). Use TEST_NUM_RECORDS for smoke tests.
  *       Lines appear as each user starts/finishes; long runs no longer look “stuck” before Promise.all completes.
  */
 
+const fs = require('fs').promises;
 const http = require('http');
 const https = require('https');
+const path = require('path');
 
-const BASE = process.env.TEST_BASE_URL || 'http://localhost:3000';
+const SAVE_OUTPUT = !['0', 'false'].includes(String(process.env.CONCURRENT_OUTPUT || '').toLowerCase());
+const OUT_ROOT = process.env.CONCURRENT_OUT_DIR || path.join(__dirname, '..', 'outPut');
+
+const BASE = process.env.TEST_BASE_URL || 'https://realistic-data-generator-g6j8.onrender.com';
 const CONCURRENT_USERS = Math.max(1, parseInt(process.env.CONCURRENT_USERS || '25', 10) || 25);
 const MAX_503_RETRIES = Math.max(1, parseInt(process.env.USE_COPY_LOCK_WAIT || '30', 10) || 30);
 const _progRaw = process.env.CONCURRENT_PROGRESS_PAGES;
@@ -91,10 +99,29 @@ function parseJsonSafe(raw) {
     }
 }
 
+const MAX_BODY_RAW_CHARS = Math.max(1000, parseInt(process.env.CONCURRENT_MAX_BODY_CHARS || '500000', 10) || 500000);
+
+async function saveHttpResponse(runDir, userId, reqIndex, status, url, body) {
+    if (!runDir) return;
+    const dir = path.join(runDir, `user-${userId}`);
+    await fs.mkdir(dir, { recursive: true });
+    const name = `${String(reqIndex).padStart(5, '0')}-${status}.json`;
+    const file = path.join(dir, name);
+    const parsed = parseJsonSafe(body);
+    const payload = {
+        status,
+        url,
+        savedAt: new Date().toISOString(),
+        body: parsed !== null ? parsed : undefined,
+        bodyRaw: parsed === null ? String(body).slice(0, MAX_BODY_RAW_CHARS) : undefined
+    };
+    await fs.writeFile(file, JSON.stringify(payload, null, 2), 'utf8');
+}
+
 /**
  * One user: walk pages until a 400 (invalid page).
  */
-async function simulateUser(userId) {
+async function simulateUser(userId, runDir) {
     const started = Date.now();
     let url = new URL(INITIAL_PATH, BASE).href;
     let requests = 0;
@@ -106,6 +133,8 @@ async function simulateUser(userId) {
         requests++;
         const res = await getWithRetry(url);
         lastStatus = res.status;
+
+        await saveHttpResponse(runDir, userId, requests, res.status, url, res.body);
 
         if (res.status === 400) {
             lastBodySnippet = res.body.slice(0, 200);
@@ -167,12 +196,38 @@ async function main() {
     );
     console.log();
 
+    let runDir = null;
+    if (SAVE_OUTPUT) {
+        const runId = new Date().toISOString().replace(/[:.]/g, '-');
+        runDir = path.join(OUT_ROOT, runId);
+        await fs.mkdir(runDir, { recursive: true });
+        await fs.writeFile(
+            path.join(runDir, 'meta.json'),
+            JSON.stringify(
+                {
+                    startedAt: new Date().toISOString(),
+                    base: BASE,
+                    concurrentUsers: CONCURRENT_USERS,
+                    numRecords: NUM_RECORDS,
+                    initialPath: INITIAL_PATH,
+                    outRoot: OUT_ROOT,
+                    runId
+                },
+                null,
+                2
+            ),
+            'utf8'
+        );
+        console.log(`Saving responses under: ${runDir}`);
+        console.log();
+    }
+
     const t0 = Date.now();
     const results = await Promise.all(
         Array.from({ length: CONCURRENT_USERS }, (_, i) => {
             const id = i + 1;
             console.log(`→ User ${id} started`);
-            return simulateUser(id)
+            return simulateUser(id, runDir)
                 .then((r) => {
                     const secs = (r.ms / 1000).toFixed(2);
                     console.log(
@@ -194,17 +249,49 @@ async function main() {
     console.log();
     if (failures.length) {
         console.log(`Failed: ${failures.length}/${CONCURRENT_USERS}`);
-        process.exit(1);
     }
 
     const totalRequests = ok.reduce((s, r) => s + r.requests, 0);
-    const maxUserMs = Math.max(...ok.map((r) => r.ms));
-    const minUserMs = Math.min(...ok.map((r) => r.ms));
-    const avgUserMs = ok.reduce((s, r) => s + r.ms, 0) / ok.length;
-    console.log(`All ${CONCURRENT_USERS} users finished with HTTP 400 after last page.`);
-    console.log(`Wall time (parallel): ${totalMs}ms (${(totalMs / 1000).toFixed(2)}s)`);
-    console.log(`Sum of requests: ${totalRequests} (avg ${(totalRequests / CONCURRENT_USERS).toFixed(1)} per user)`);
-    console.log(`Per-user total time — min: ${minUserMs}ms | max: ${maxUserMs}ms | avg: ${avgUserMs.toFixed(0)}ms`);
+    const maxUserMs = ok.length ? Math.max(...ok.map((r) => r.ms)) : 0;
+    const minUserMs = ok.length ? Math.min(...ok.map((r) => r.ms)) : 0;
+    const avgUserMs = ok.length ? ok.reduce((s, r) => s + r.ms, 0) / ok.length : 0;
+    if (!failures.length) {
+        console.log(`All ${CONCURRENT_USERS} users finished with HTTP 400 after last page.`);
+        console.log(`Wall time (parallel): ${totalMs}ms (${(totalMs / 1000).toFixed(2)}s)`);
+        console.log(`Sum of requests: ${totalRequests} (avg ${(totalRequests / CONCURRENT_USERS).toFixed(1)} per user)`);
+        console.log(`Per-user total time — min: ${minUserMs}ms | max: ${maxUserMs}ms | avg: ${avgUserMs.toFixed(0)}ms`);
+    }
+
+    if (runDir) {
+        await fs.writeFile(
+            path.join(runDir, 'summary.json'),
+            JSON.stringify(
+                {
+                    finishedAt: new Date().toISOString(),
+                    wallMs: totalMs,
+                    concurrentUsers: CONCURRENT_USERS,
+                    failedUsers: failures.length,
+                    totalRequests,
+                    perUserOk: ok.map((r) => ({
+                        userId: r.userId,
+                        requests: r.requests,
+                        pagesOk: r.pagesOk,
+                        ms: r.ms
+                    })),
+                    errors: failures.map((r) => ({ userId: r.userId, error: r.error }))
+                },
+                null,
+                2
+            ),
+            'utf8'
+        );
+        console.log();
+        console.log(`Wrote summary: ${path.join(runDir, 'summary.json')}`);
+    }
+
+    if (failures.length) {
+        process.exit(1);
+    }
 }
 
 main().catch((e) => {
