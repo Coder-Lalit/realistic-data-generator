@@ -356,6 +356,18 @@ function shouldSkipAccessLog(req) {
     return /\.(js|mjs|css|ico|png|jpg|jpeg|gif|svg|webp|woff2?|map)$/i.test(p);
 }
 
+/** DEBUG=true or DEBUG=1 — log who handles each request at INFO (no need to set LOG_LEVEL=DEBUG). */
+function isDebugEnvEnabled() {
+    const v = process.env.DEBUG;
+    return v === 'true' || v === '1';
+}
+
+function shouldSkipDispatchLog(req) {
+    const p = req.path || '';
+    if (p === '/ping') return true;
+    return shouldSkipAccessLog(req);
+}
+
 // HTTP access / error line logging (200s were previously silent at INFO)
 app.use((req, res, next) => {
     const t0 = Date.now();
@@ -379,6 +391,23 @@ app.use((req, res, next) => {
         else if (code >= 400) logger.warn(line);
         else logger.info(line);
     });
+    next();
+});
+
+// Who is handling this request (pid + cluster worker when applicable). Set DEBUG=true to log at INFO; or LOG_LEVEL=DEBUG without DEBUG env.
+app.use((req, res, next) => {
+    if (shouldSkipDispatchLog(req)) {
+        next();
+        return;
+    }
+    const url = req.originalUrl || req.url;
+    const who = `pid=${process.pid}${clusterWorkerIdSuffix()}`;
+    const msg = `Processing request: ${req.method} ${url} (${who})`;
+    if (isDebugEnvEnabled()) {
+        logger.info(msg);
+    } else if (CURRENT_LOG_LEVEL >= LOG_LEVELS.DEBUG) {
+        logger.debug(msg);
+    }
     next();
 });
 
