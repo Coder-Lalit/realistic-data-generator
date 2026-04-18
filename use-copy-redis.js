@@ -55,6 +55,24 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function redisErrorMessage(err) {
+    return err && err.message ? String(err.message) : '';
+}
+
+/** Command / connect errors that should map to redis_unavailable (not crash the request). */
+function isRedisTransientOrCapacityError(err) {
+    const msg = redisErrorMessage(err);
+    return (
+        msg.includes('max number of clients') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('Socket closed') ||
+        msg.includes('LOADING') ||
+        msg.includes('READONLY')
+    );
+}
+
 /** Sliding TTL: extend template + config keys by full window (e.g. next 10 min from this hit). */
 async function refreshPairTtl(c, cacheKey) {
     const ttl = ttlSeconds();
@@ -79,8 +97,15 @@ async function getClient() {
             .connect()
             .then(() => client)
             .catch((err) => {
+                connecting = null;
+                client = null;
+                const msg = redisErrorMessage(err);
+                console.error('[use-copy-redis] connect failed:', msg);
+                // Capacity / transient: do not latch connectFailed so a later request can retry.
+                if (isRedisTransientOrCapacityError(err)) {
+                    return null;
+                }
                 connectFailed = true;
-                console.error('[use-copy-redis] connect failed:', err.message);
                 return null;
             });
     }
@@ -96,7 +121,13 @@ async function isReady() {
 async function getConfig(cacheKey) {
     const c = await getClient();
     if (!c) return null;
-    const raw = await c.get(configKey(cacheKey));
+    let raw;
+    try {
+        raw = await c.get(configKey(cacheKey));
+    } catch (err) {
+        console.error('[use-copy-redis] getConfig:', redisErrorMessage(err));
+        return null;
+    }
     if (!raw) return null;
     try {
         const cfg = JSON.parse(raw);
@@ -132,68 +163,77 @@ async function getOrCreateTemplateRow(sessionConfig, cacheKey, generateOneRow) {
     const maxWait = lockWaitMs();
     const step = pollMs();
 
-    const existing = await c.get(tKey);
-    if (existing) {
-        try {
-            const row = JSON.parse(existing);
-            await refreshPairTtl(c, cacheKey);
-            return { hit: true, row };
-        } catch {
-            await c.del(tKey).catch(() => {});
-        }
-    }
-
-    const acquired = await c.set(lKey, '1', { EX: lockTtl, NX: true });
-
-    if (acquired === 'OK') {
-        try {
-            const again = await c.get(tKey);
-            if (again) {
-                const row = JSON.parse(again);
-                await refreshPairTtl(c, cacheKey);
-                return { hit: true, row };
-            }
-            const row = generateOneRow();
-            const payload = JSON.stringify(row);
-            await c.set(tKey, payload, { EX: ttl });
-            await c.set(cKey, JSON.stringify(sessionConfig), { EX: ttl });
-            return { hit: false, row };
-        } catch (e) {
-            await c.del(tKey).catch(() => {});
-            throw e;
-        } finally {
-            await c.del(lKey).catch(() => {});
-        }
-    }
-
-    const deadline = Date.now() + maxWait;
-    while (Date.now() < deadline) {
-        const raw = await c.get(tKey);
-        if (raw) {
+    try {
+        const existing = await c.get(tKey);
+        if (existing) {
             try {
-                const row = JSON.parse(raw);
+                const row = JSON.parse(existing);
                 await refreshPairTtl(c, cacheKey);
                 return { hit: true, row };
             } catch {
-                await sleep(step);
-                continue;
+                await c.del(tKey).catch(() => {});
             }
         }
-        await sleep(step);
-    }
 
-    const finalCheck = await c.get(tKey);
-    if (finalCheck) {
-        try {
-            const row = JSON.parse(finalCheck);
-            await refreshPairTtl(c, cacheKey);
-            return { hit: true, row };
-        } catch {
-            /* fallthrough */
+        const acquired = await c.set(lKey, '1', { EX: lockTtl, NX: true });
+
+        if (acquired === 'OK') {
+            try {
+                const again = await c.get(tKey);
+                if (again) {
+                    const row = JSON.parse(again);
+                    await refreshPairTtl(c, cacheKey);
+                    return { hit: true, row };
+                }
+                const row = generateOneRow();
+                const payload = JSON.stringify(row);
+                await c.set(tKey, payload, { EX: ttl });
+                await c.set(cKey, JSON.stringify(sessionConfig), { EX: ttl });
+                return { hit: false, row };
+            } catch (e) {
+                await c.del(tKey).catch(() => {});
+                if (isRedisTransientOrCapacityError(e)) {
+                    console.error('[use-copy-redis] getOrCreateTemplateRow:', redisErrorMessage(e));
+                    return { hit: false, row: null, error: 'redis_unavailable' };
+                }
+                throw e;
+            } finally {
+                await c.del(lKey).catch(() => {});
+            }
         }
-    }
 
-    return { hit: false, row: null, error: 'lock_wait_timeout' };
+        const deadline = Date.now() + maxWait;
+        while (Date.now() < deadline) {
+            const raw = await c.get(tKey);
+            if (raw) {
+                try {
+                    const row = JSON.parse(raw);
+                    await refreshPairTtl(c, cacheKey);
+                    return { hit: true, row };
+                } catch {
+                    await sleep(step);
+                    continue;
+                }
+            }
+            await sleep(step);
+        }
+
+        const finalCheck = await c.get(tKey);
+        if (finalCheck) {
+            try {
+                const row = JSON.parse(finalCheck);
+                await refreshPairTtl(c, cacheKey);
+                return { hit: true, row };
+            } catch {
+                /* fallthrough */
+            }
+        }
+
+        return { hit: false, row: null, error: 'lock_wait_timeout' };
+    } catch (err) {
+        console.error('[use-copy-redis] getOrCreateTemplateRow:', redisErrorMessage(err));
+        return { hit: false, row: null, error: 'redis_unavailable' };
+    }
 }
 
 module.exports = {

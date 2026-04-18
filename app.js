@@ -1212,7 +1212,7 @@ function generateObject(numFields, numObjects, nestingLevel, nestedFields = 3, e
         }
         
         const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue);
+        obj[fieldName] = rawValue;
     }
 
     // Generate nested objects only if we should nest
@@ -1253,7 +1253,7 @@ function generateSimpleObject(numFields = 4, excludeEmoji = false) {
         }
         
         const rawValue = generateFieldValue(fieldType);
-        obj[fieldName] = validateAndCleanFieldValue(fieldName, rawValue);
+        obj[fieldName] = rawValue;
     }
 
     return obj;
@@ -1263,35 +1263,6 @@ function generateSimpleObject(numFields = 4, excludeEmoji = false) {
 function isEmojiField(fieldType) {
     const emojiFields = ['bio', 'emoji'];
     return emojiFields.includes(fieldType);
-}
-
-function containsEmoji(text) {
-    if (typeof text !== 'string') return false;
-    const emojiRegex =
-        /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1F018}-\u{1F270}]|[\u{238C}-\u{2454}]|[\u{20D0}-\u{20FF}]/gu;
-    return emojiRegex.test(text);
-}
-
-function removeEmojis(text) {
-    if (typeof text !== 'string') return text;
-    const emojiRegex =
-        /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1F018}-\u{1F270}]|[\u{238C}-\u{2454}]|[\u{20D0}-\u{20FF}]/gu;
-    return text.replace(emojiRegex, '').trim();
-}
-
-// Function to validate and clean field values
-function validateAndCleanFieldValue(fieldName, fieldValue) {
-    let processedValue = fieldValue;
-    
-    // Skip emoji validation for fields that start with "emoji"
-    if (!fieldName.toLowerCase().startsWith('emoji')) {
-        // Check if the field contains emojis and remove them if found
-        if (containsEmoji(processedValue)) {
-            processedValue = removeEmojis(processedValue);
-        }
-    }
-    
-    return processedValue;
 }
 
 // Function to generate field values based on type

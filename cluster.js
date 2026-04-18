@@ -8,6 +8,10 @@
  *   WEB_CONCURRENCY  number of workers (default: CPU count, min 1, max 32)
  *   CLUSTER_WORKERS  alias for WEB_CONCURRENCY
  *
+ * With REDIS_URL: each worker holds one Redis connection — plan maxclients (and any other apps on the same URL)
+ * must allow at least (workers × instances). If you see ERR max number of clients reached, lower WEB_CONCURRENCY
+ * or raise the Redis tier / maxclients.
+ *
  * Run: npm run start:cluster   (or node cluster.js)
  */
 
